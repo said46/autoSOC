@@ -5,10 +5,15 @@ from selenium.webdriver.support import expected_conditions as ec
 import ctypes
 
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support import expected_conditions
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.common.exceptions import NoSuchElementException
 from selenium.common.exceptions import TimeoutException
 from selenium.common.exceptions import ElementNotInteractableException
 from selenium.common.exceptions import NoSuchWindowException
+from selenium.common.exceptions import StaleElementReferenceException
 
 import time
 import openpyxl as xl
@@ -18,16 +23,14 @@ import logging
 logging.basicConfig(filename='autoSOC.log', filemode="w", level=logging.INFO,
                     format='%(asctime)s -  %(levelname)s -  %(message)s')
 
-
 def message_box(title, text, style):
     return ctypes.windll.user32.MessageBoxW(0, text, title, style)
 
+#  Styles:
+#  0 : OK *** #  1 : OK | Cancel *** 2 : Abort | Retry | Ignore *** 3 : Yes | No | Cancel ***  
+# 4 : Yes | No *** 5 : Retry | Cancel *** 6 : Cancel | Try Again | Continue
 
-# Styles: 0 : OK *** #  1 : OK | Cancel *** 2 : Abort | Retry | Ignore *** 3 : Yes | No | Cancel ***  4 : Yes | No
-# *** 5 : Retry | Cancel *** 6 : Cancel | Try Again | Continue
-
-msg_title = "Something went wrong, the script will be terminated"
-
+msg_title = "Что-то пошло не так, скрипт будет завершен..."
 
 def switch_lang_if_not_eng():
     xpath = "//img[contains(@src,'/images/gb.jpg')]"
@@ -42,38 +45,27 @@ def switch_lang_if_not_eng():
         # FUTURE: switch to English here
         return
 
-
 def is_menu_item_already_selected(parent_id, menu_item_text):
     # find <li> element with particular text and class containing 'k-item' and 'k-state-selected'
     # that element must have parent tag <ul> with id=parent_id
-    item_xpath = "//ul[@id='%s']/li[text()='%s' and contains(@class ,'k-item') and contains(@class ," \
-                 "'k-state-selected')]" % (parent_id, menu_item_text)
+    item_xpath = f"//ul[@id='{parent_id}']/li[text()='{menu_item_text}' and contains(@class ,'k-item') and "\
+                  "contains(@class ,'k-state-selected')]"
     try:
         driver.find_element(By.XPATH, item_xpath)
-        logging.info(
-            "is_menu_item_already_selected: item_xpath for '%s', '%s' is: %s" % (menu_item_text, parent_id, item_xpath))
+        logging.info(f"is_menu_item_already_selected: item_xpath for '{menu_item_text}', '{parent_id}' is: '{item_xpath}'")
         return True
     except NoSuchElementException:
         return False
 
-
 def select_menu_item(parent_id, menu_item_text):
     # find <li> element with particular text and class containing 'k-item'
     # that element must have parent tag <ul> with id=parent_id
-    elmt = None
-    item_xpath = "//ul[@id='%s']/li[text()='%s' and contains(@class ,'k-item')]" % (parent_id, menu_item_text)
-    logging.info("select_menu_item: item_xpath for '%s', '%s' is: %s" % (menu_item_text, parent_id, item_xpath))
     try:
-        elmt = driver.find_element(By.XPATH, item_xpath)
-    except NoSuchElementException:
-        logging.info("select_menu_item: NoSuchElementException, XPATH = '%s'" % item_xpath)
-        message_box(msg_title, 'NoSuchElementException: ' + item_xpath, 0)
-        quit()
-    except NoSuchWindowException:
-        quit()
-    try:
-        # WebDriverWait(driver, 5).until(ec.visibility_of_element_located((By.XPATH, item_xpath)))
-        WebDriverWait(driver, 5).until(ec.element_to_be_clickable(elmt))  # this is a better way !!!!!
+        item_xpath = f"//ul[@id='{parent_id}']/li[text()='{menu_item_text}' and contains(@class ,'k-item')]"
+        logging.info(f"select_menu_item: item_xpath for '{menu_item_text}', '{parent_id}' is: '{item_xpath}'")        
+        ignored_exceptions = (NoSuchElementException, StaleElementReferenceException)
+        element = WebDriverWait(driver, 5, ignored_exceptions=ignored_exceptions).until(\
+            expected_conditions.element_to_be_clickable((By.XPATH, item_xpath)))
 
         # this delay might be configurable, it is not required, but for some reason some menu items
         # are selected incorrectly without raising NoSuchElementException for the next menu
@@ -86,15 +78,30 @@ def select_menu_item(parent_id, menu_item_text):
         # main variant of clicking
         # element.click()
 
-    except TimeoutException:
-        logging.info("select_menu_item: TimeoutException, XPATH = '%s'" % item_xpath)
-        message_box(msg_title, 'TimeoutException: ' + item_xpath, 0)
+    except NoSuchElementException:
+        logging.info(f"select_menu_item: NoSuchElementException, XPATH = '{item_xpath}'")
+        message_box(msg_title, 'NoSuchElementException: ' + item_xpath, 0)
         quit()
-    except ElementNotInteractableException:
-        logging.info("select_menu_item: ElementNotInteractableException, XPATH = '%s'" % item_xpath)
-        message_box(msg_title, 'ElementNotInteractableException: ' + item_xpath, 0)
+    except TimeoutException as e:
+        exception_name = type(e).__name__
+        logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
+        message_box(msg_title, f"{exception_name}: {item_xpath}", 0)
         quit()
-    except NoSuchWindowException:
+    except ElementNotInteractableException as e:
+        exception_name = type(e).__name__
+        logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
+        message_box(msg_title, f"{exception_name}: {item_xpath}", 0)
+        quit()
+    except NoSuchWindowException as e:
+        exception_name = type(e).__name__
+        logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
+        quit()
+    except StaleElementReferenceException as e:
+        exception_name = type(e).__name__
+        logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
+        message_box(msg_title, f"Исключение {exception_name}, можно нажать Confirm, чтобы сохранить те точки, "\
+                                "которые уже добавлены, и запустить скрипт снова (предвариельно удалив уже "\
+                                "добавленные точки из overrides.xslx)", 0)
         quit()
 
 
@@ -109,7 +116,7 @@ sheet = wb['overrides']
 
 list_of_overrides = []
 for row in range(2, sheet.max_row + 1):
-    if sheet.cell(row, 1).value is None:
+    if sheet.cell(row, 1).value in (None, ""):
         break
     xlsx_override = {"TagNumber": sheet.cell(row, 1).value, "Description": sheet.cell(row, 2).value,
                      "OverrideType": sheet.cell(row, 4).value, "OverrideMethod": sheet.cell(row, 5).value,
@@ -136,7 +143,7 @@ driver.find_element(By.XPATH, "//button[@type='submit' and @class='panel-line-bt
 
 # navigate to Edit Overrides page
 SOC_base_link = "http://eptw.sakhalinenergy.ru/SOC/EditOverrides/"
-driver.get(SOC_base_link + SOC_id)  # example: http://eptw.sakhalinenergy.ru/SOC/EditOverrides/1489636
+driver.get(SOC_base_link + SOC_id) #example: http://eptw.sakhalinenergy.ru/SOC/EditOverrides/1489636
 
 # check if the SOC is locked
 try:
@@ -144,20 +151,37 @@ try:
     message_box('SOC is locked, the script will be terminated', li_locked.text, 0)
     quit()
 except NoSuchElementException:
+    # the pass is put here on purpose
     pass
+
+# check for Access Denied
+try:
+    access_denied = driver.find_element(By.XPATH, "//h1[text()='Access Denied']")
+    message_box(access_denied.text, f'Access denied, probably SOC {SOC_id} is archived or in improper state', 0)
+    quit()
+except NoSuchElementException:
+    # the pass is put here on purpose
+    pass
+
 
 for override in list_of_overrides:
     # print Tag Number and Description
-    driver.find_element(By.ID, "TagNumber").send_keys(override["TagNumber"])
-    driver.find_element(By.ID, "Description").send_keys(override["Description"])
+    try:
+        driver.find_element(By.ID, "TagNumber").send_keys(override["TagNumber"])
+        driver.find_element(By.ID, "Description").send_keys(override["Description"])
+    except NoSuchElementException as e:
+        logging.info(f"{str(e)}")
+        message_box(msg_title, f"{str(e)}", 0)
+        quit()
 
     # click override type menu and select override type item
     OverrideTypeIdMenu_XPATH = '//span[@aria-owns="OverrideTypeId_listbox"]'
     try:
         driver.find_element(By.XPATH, OverrideTypeIdMenu_XPATH).click()
-    except NoSuchElementException:
-        logging.info("OverrideTypeId_listbox click(): NoSuchElementException, XPATH = '%s'" % OverrideTypeIdMenu_XPATH)
-        message_box(msg_title, 'NoSuchElementException: ' + OverrideTypeIdMenu_XPATH, 0)
+    except NoSuchElementException as e:
+        exception_name = type(e).__name__
+        logging.info(f"OverrideTypeId_listbox click(): {exception_name}, XPATH = '{OverrideTypeIdMenu_XPATH}'")
+        message_box(msg_title, f"{exception_name}: {OverrideTypeIdMenu_XPATH}", 0)
         quit()
     except NoSuchWindowException:
         quit()
@@ -170,12 +194,14 @@ for override in list_of_overrides:
         OverrideMethodMenu_XPATH = '//span[@aria-owns="OverrideMethodId_listbox"]'
         try:
             driver.find_element(By.XPATH, OverrideMethodMenu_XPATH).click()
-        except NoSuchElementException:
-            logging.info(
-                "OverrideMethodId_listbox click(): NoSuchElementException, XPATH = '%s'" % OverrideMethodMenu_XPATH)
-            message_box(msg_title, 'NoSuchElementException: ' + OverrideMethodMenu_XPATH, 0)
+        except NoSuchElementException as e:
+            exception_name = type(e).__name__
+            logging.info(f"OverrideMethodId_listbox click(): {exception_name}, XPATH = '{OverrideMethodMenu_XPATH}'")
+            message_box(msg_title, f'{exception_name}: {OverrideMethodMenu_XPATH}', 0)
             quit()
-        except NoSuchWindowException:
+        except NoSuchWindowException as e:            
+            exception_name = type(e).__name__
+            logging.info(f"OverrideMethodId_listbox click(): {exception_name}, XPATH = '{OverrideMethodMenu_XPATH}'")
             quit()
         select_menu_item('OverrideMethodId_listbox', override["OverrideMethod"])
 
@@ -187,12 +213,14 @@ for override in list_of_overrides:
     AppliedStateMenu_XPATH = '//span[@aria-owns="OverrideAppliedStateId_listbox"]'
     try:
         driver.find_element(By.XPATH, AppliedStateMenu_XPATH).click()
-    except NoSuchElementException:
-        logging.info(
-            "OverrideAppliedStateId_listbox click(): NoSuchElementException, XPATH = '%s'" % AppliedStateMenu_XPATH)
-        message_box(msg_title, 'NoSuchElementException: ' + AppliedStateMenu_XPATH, 0)
+    except NoSuchElementException as e:
+        exception_name = type(e).__name__
+        logging.info(f"OverrideAppliedStateId_listbox click(): {exception_name}, XPATH = '{AppliedStateMenu_XPATH}'")
+        message_box(msg_title, f'exception_name: {AppliedStateMenu_XPATH}', 0)
         quit()
-    except NoSuchWindowException:
+    except NoSuchWindowException as e:
+        exception_name = type(e).__name__
+        logging.info(f"OverrideAppliedStateId_listbox click(): {exception_name}, XPATH = '{AppliedStateMenu_XPATH}'")
         quit()
     select_menu_item('OverrideAppliedStateId_listbox', override['AppliedState'])
 
@@ -209,14 +237,15 @@ for override in list_of_overrides:
             RemovedStateMenu_XPATH = '//span[@aria-owns="OverrideRemovedStateId_listbox"]'
             try:
                 element = driver.find_element(By.XPATH, RemovedStateMenu_XPATH)
-            except NoSuchElementException:
-                logging.info("OverrideAppliedStateId_listbox click(): NoSuchElementException, XPATH = '%s'"
-                             % RemovedStateMenu_XPATH)
-                message_box(msg_title, 'NoSuchElementException: ' + RemovedStateMenu_XPATH, 0)
+            except NoSuchElementException as e:
+                exception_name = type(e).__name__
+                logging.info(f"OverrideRemovedStateId_listbox click(): {exception_name}, XPATH = '{RemovedStateMenu_XPATH}'")
+                message_box(msg_title, f'{exception_name}: {RemovedStateMenu_XPATH}', 0)
                 quit()
-            except NoSuchWindowException:
+            except NoSuchWindowException as e:
+                exception_name = type(e).__name__
+                logging.info(f"OverrideRemovedStateId_listbox click(): {exception_name}, XPATH = '{RemovedStateMenu_XPATH}'")
                 quit()
-            element.click()
             select_menu_item('OverrideRemovedStateId_listbox', override["RemovedState"])
 
     # AdditionalValueRemovedState
@@ -224,10 +253,8 @@ for override in list_of_overrides:
         driver.find_element(By.ID, "AdditionalValueRemovedState").send_keys(override["AdditionalValueRemovedState"])
 
     # press Add button
-    time.sleep(1)
     driver.find_element(By.ID, "AddOverrideBtn").click()
 
-time.sleep(1)
 message_box('WARNING!!!', "Don't press OK UNTIL you press Confirm button!", 0)
 
 driver.quit()
