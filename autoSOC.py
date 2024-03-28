@@ -226,8 +226,13 @@ for override in list_of_overrides:
 
     # AdditionalValueAppliedState
     if override["AdditionalValueAppliedState"] is not None:
-        driver.find_element(By.ID, "AdditionalValueAppliedState").send_keys(override["AdditionalValueAppliedState"])
-
+        try:
+            driver.find_element(By.ID, "AdditionalValueAppliedState").send_keys(override["AdditionalValueAppliedState"])
+        except ElementNotInteractableException as e:
+            exception_name = type(e).__name__
+            logging.info(f"send_keys() for element with ID 'AdditionalValueAppliedState': {exception_name}")
+            quit()
+            
     # click Removed state menu and select the required item
     # 1. it is not required if RemovedState is not defined for the override
     # 2. is_menu_item_already_selected function checks if the menu item
