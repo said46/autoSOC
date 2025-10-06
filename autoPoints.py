@@ -118,8 +118,7 @@ class SOCBot:
         config.read('autoPoints.ini', encoding="utf8")
         
         self.user_name = config['Settings']['user_name']
-        self.password = config['Settings']['password']
-        self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = bool(config['Settings']['CONNECT_TO_DB_FOR_PARTIAL_SOC_ID'])
+        self.password = config['Settings']['password']        
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = int(config['Settings']['MAX_WAIT_USER_INPUT_DELAY_SECONDS'])
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = int(config['Settings']['MAX_WAIT_PAGE_LOAD_DELAY_SECONDS'])
         self.SOC_id = config['Settings']['SOC_id']
@@ -128,6 +127,11 @@ class SOCBot:
         self.good_statuses = config['Statuses']['good_statuses'].split('-')
         self.SOC_status_approved_for_apply = config['Statuses']['SOC_status_approved_for_apply']
         self.SQL_template = config['SQL']['SOC_query']
+        # check if SQL starts with SELECT to prevent undesirable changes in the database
+        if str.lower(self.SQL_template[:7]) == "select":
+            self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = bool(config['Settings']['CONNECT_TO_DB_FOR_PARTIAL_SOC_ID'])
+        else:
+            self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = False
         
         if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
             self.SOC_ID_PATTERN = r"^\d{4,8}\+$"
