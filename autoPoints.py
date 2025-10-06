@@ -99,7 +99,7 @@ class SOCBot:
                     raise ValueError("❌ Template must be a string or compiled regex pattern")
                     
             except NoSuchWindowException as e:
-                logging.info(f"👆 The browser was closed: {str(e)}")
+                logging.info(f"⚠️  The browser was closed while waiting for user input")
                 # Note: safe_exit is now on SOCBot instance, but this class is standalone
                 # We leave this as-is to avoid deeper refactoring per your request
                 raise
@@ -115,23 +115,33 @@ class SOCBot:
         
         # Use ConfigParser without interpolation
         config = configparser.ConfigParser(interpolation=None)
-        config.read('autoPoints.ini', encoding="utf8")
+        config_file = config.read('autoPoints.ini', encoding="utf8")
+
+        if not config_file:
+            logging.warning("⚠️  Config file 'autoPoints.ini' not found. Using default values.")
         
-        self.user_name = config['Settings']['user_name']
-        self.password = config['Settings']['password']        
-        self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = int(config['Settings']['MAX_WAIT_USER_INPUT_DELAY_SECONDS'])
-        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = int(config['Settings']['MAX_WAIT_PAGE_LOAD_DELAY_SECONDS'])
-        self.SOC_id = config['Settings']['SOC_id']
-        self.SOC_roles = config['Roles']['SOC_roles'].split(',')
-        self.base_link = config['Settings']['base_link']
-        self.good_statuses = config['Statuses']['good_statuses'].split('-')
-        self.SOC_status_approved_for_apply = config['Statuses']['SOC_status_approved_for_apply']
-        self.SQL_template = config['SQL']['SOC_query']
+        self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
+        self.password = config.get('Settings', 'password', fallback='******')
+
+        self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
+        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)
+        self.SOC_id = config.get('Settings', 'SOC_id', fallback='')
+        self.SOC_roles = config.get('Roles', 'SOC_roles', fallback='OAC,OAV').split(',')
+        self.base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
+        # self.good_statuses = config['Statuses']['good_statuses'].split('-')
+        self.good_statuses = config.get(
+            'Statuses',
+            'good_statuses', 
+            fallback='принято для установки-запрошено для удаления-установлено, не подтверждено-удалено, не подтверждено').split('-')        
+        self.SOC_status_approved_for_apply = config.get('Statuses', 'SOC_status_approved_for_apply', fallback='одобрено для установки')
+        sql_template = config.get('SQL', 'SOC_query', fallback="").strip(' \n\r\t')
+        self.SQL_template = sql_template
         # check if SQL starts with SELECT to prevent undesirable changes in the database
-        if str.lower(self.SQL_template[:7]) == "select":
-            self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = bool(config['Settings']['CONNECT_TO_DB_FOR_PARTIAL_SOC_ID'])
+        if sql_template and sql_template.strip().lower().startswith('select'):
+            self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = config.getboolean('Settings', 'CONNECT_TO_DB_FOR_PARTIAL_SOC_ID', fallback=False)
         else:
             self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = False
+            logging.warning("⚠️  SQL query in ini-file doesn't start with SELECT or is empty, use of database is off")
         
         if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
             self.SOC_ID_PATTERN = r"^\d{4,8}\+$"
@@ -525,6 +535,9 @@ class SOCBot:
             WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
                 self.WaitForValueToMatchTemplate((By.ID, "InjectedInput"), pattern)
             )
+        except NoSuchWindowException:
+            logging.warning(f"⚠️  Browser windows was closed, end of script")
+            self.safe_exit()
         except Exception as e:
             logging.error(f"❌ Failed to wait for SOC_id to be entered: {e}")
             self.inject_error_message(f"❌ Failed to wait for SOC_id to be entered, the script cannot proceed, close this window.")
