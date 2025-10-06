@@ -1,0 +1,7 @@
+auto-py-to-exe.txt
+*.exe
+*.log
+*.spec
+build/
+dist/
+__pycache__/
