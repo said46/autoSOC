@@ -128,7 +128,6 @@ class SOCBot:
         self.SOC_id = config.get('Settings', 'SOC_id', fallback='')
         self.SOC_roles = config.get('Roles', 'SOC_roles', fallback='OAC,OAV').split(',')
         self.base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
-        # self.good_statuses = config['Statuses']['good_statuses'].split('-')
         self.good_statuses = config.get(
             'Statuses',
             'good_statuses', 
