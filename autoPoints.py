@@ -12,59 +12,17 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 
 import time
-import logging
 import configparser
 import re
 import sys
 
-import colorama
-from colorama import Fore, Back, Style
-
 from autoDB import SQLQueryDirect
 
-colorama.init()
-
-class ColoredFormatter(logging.Formatter):
-    def format(self, record):
-        record.msg = f"{Fore.RED}{record.msg}{Style.RESET_ALL}"
-        return super().format(record)
-
-def setup_logging():
-    # Create a logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
-    # Clear any existing handlers (optional, but safe)
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    # --- File Handler ---
-    log_filename = __file__[__file__.rfind("\\")+1:-3] + ".log"
-    file_handler = logging.FileHandler(log_filename, encoding='utf-8', mode='w')
-    format_string = "%(asctime)s\tline: %(lineno)d\tfunction: %(funcName)s ---> %(message)s"    
-    file_formatter = logging.Formatter(format_string)
-    if sys.stdout.isatty():
-        # if in TTY use ColoredFormatter
-        console_formatter = ColoredFormatter(format_string)
-        print("👆 TTY detected")
-    else:
-        # otherwise use plain Formatter
-        console_formatter = logging.Formatter(format_string)
-        print("👆 TTY is not detected")
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
-
-    # --- Console Handler ---
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
+import logging
+from logging_setup import logging_setup
 
 def message_box(title, text, style):
     return ctypes.windll.user32.MessageBoxW(0, text, title, style)
-
-#  Styles:
-#  0 : OK *** #  1 : OK | Cancel *** 2 : Abort | Retry | Ignore *** 3 : Yes | No | Cancel ***  
-# 4 : Yes | No *** 5 : Retry | Cancel *** 6 : Cancel | Try Again | Continue
 
 class SOCBot:
     class WaitForValueToMatchTemplate:
@@ -109,7 +67,7 @@ class SOCBot:
                 return False
 
     def __init__(self):
-        setup_logging()
+        logging_setup()
          
         self.setup_global_exception_handler()
         
@@ -160,7 +118,6 @@ class SOCBot:
 
     def safe_exit(self):
         try:
-            time.sleep(2)
             # check if the driver needs to be closed and close it if so
             if hasattr(self, 'driver') and self.driver:
                 self.driver.quit()   
@@ -519,8 +476,12 @@ class SOCBot:
 
     
     def run_automation(self):
-        self.driver.get(self.base_link)
-        self.driver.maximize_window()
+        try:
+            self.driver.maximize_window()
+            self.driver.get(self.base_link)
+        except WebDriverException as e:
+            logging.error(f"❌ Failed to load {self.base_link} - {e.__class__.__name__}")
+            self.inject_error_message(f"❌ Cannot access {self.base_link}. Check network connection.")
 
         # login
         self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
