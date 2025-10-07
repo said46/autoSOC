@@ -2,6 +2,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 import ctypes
+from typing import Union
 
 from selenium.webdriver.support.ui import Select
 from selenium.common.exceptions import NoSuchElementException
@@ -35,11 +36,11 @@ class SOCBot:
                       - A string (exact match)
                       - A compiled regex pattern (using re.compile)
         """
-        def __init__(self, locator, template):
+        def __init__(self, locator: tuple[str, str], template: Union[str, re.Pattern]):
             self.locator = locator
             self.template = template
 
-        def __call__(self, driver):
+        def __call__(self, driver: WebDriver):
             try:
                 element = driver.find_element(*self.locator)
                 value = element.get_attribute("value")  # For input fields
@@ -116,7 +117,7 @@ class SOCBot:
         options.add_argument("--disable-dev-shm-usage")        
         return webdriver.Chrome(options=options)
 
-    def safe_exit(self):
+    def safe_exit(self) -> None:
         try:
             # check if the driver needs to be closed and close it if so
             if hasattr(self, 'driver') and self.driver:
@@ -141,7 +142,7 @@ class SOCBot:
             # FUTURE: switch to English here
             return
 
-    def click_button(self, locator):
+    def click_button(self, locator: tuple[str, str]):
         try:
             element = WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
                 EC.element_to_be_clickable(locator)
@@ -185,7 +186,7 @@ class SOCBot:
     
         sys.excepthook = handle_exception            
 
-    def _is_browser_closed(self):
+    def _is_browser_closed(self) -> bool:
         """Check if browser window is actually closed"""
         try:
             # Try to get window handles - if it fails, browser is closed
@@ -198,7 +199,7 @@ class SOCBot:
             logging.info(f"💥 Browser check exception: {e}")
             return True    
 
-    def _wait_for_browser_to_close(self, timeout=None):
+    def _wait_for_browser_to_close(self, timeout=None) -> None:
         """Wait for browser close with quick polling"""
         if timeout is None:
             timeout = self.MAX_WAIT_USER_INPUT_DELAY_SECONDS
@@ -217,7 +218,7 @@ class SOCBot:
         finally:
             self.safe_exit()    
     
-    def inject_error_message(self, msg_text="message is not defined", locator=None):
+    def inject_error_message(self, msg_text: str="message is not defined", locator: tuple[str, str]=None):
         """
         Args:
             msg_text: message text
@@ -301,7 +302,7 @@ class SOCBot:
             logging.info(f"⏳ Browser open - waiting up to {self.MAX_WAIT_USER_INPUT_DELAY_SECONDS} seconds for user to close it")
             self._wait_for_browser_to_close()
 
-    def inject_info_message(self, msg_text="message is not defined", locator=None) -> None:
+    def inject_info_message(self, msg_text: str="message is not defined", locator: tuple[str, str]=None) -> None:
         # after updating all the points with the current role we need to inform the user that he/she should press 
         # the confirm button to proceed. We inject the text information to the left of the buttons using JavaScript
 
@@ -446,7 +447,7 @@ class SOCBot:
                 logging.error(f"❌ Failed to accept the SOC {self.SOC_id} for apply: {e}")
                 self.inject_error_message(f"❌ Failed to accept the SOC {self.SOC_id} for apply, the script cannot proceed, close this window.")
 
-    def update_points(self):
+    def update_points(self) -> None:
         # Kendo API approach failed (becomes too complicated), because the Kendo dropdowns are created dynamically 
         # by the updateOverrideFunctions.onGridDataBound() function, but they're not initialized yet when our script runs.
         try:
@@ -473,7 +474,7 @@ class SOCBot:
             logging.error(f"❌ Failed to update points: {e}")
             self.inject_error_message(f"❌ Failed to update some points, the script cannot proceed, close this window.")
 
-    def SOC_details_opened_check(self):
+    def SOC_details_opened_check(self) -> None:
         # check for 404 error, it takes place when SOC_id does not exist
         try:
             self.driver.find_element(By.XPATH, "//h1[contains(@class, 'text-danger') and contains(text(), '404')]")
@@ -482,7 +483,7 @@ class SOCBot:
         except NoSuchElementException:
             logging.info("✅ Success: no error 404")
 
-    def SOC_locked_check(self):
+    def SOC_locked_check(self) -> None:
         # check if the SOC is locked
         try:
             li_locked = self.driver.find_element(By.XPATH, "//li[contains(text(), 'Locked')]")
@@ -491,7 +492,7 @@ class SOCBot:
         except NoSuchElementException:
             logging.info("✅ Success: SOC is not locked")
 
-    def access_denied_check(self):
+    def access_denied_check(self) -> None:
         # check for Access Denied
         try:
             access_denied = self.driver.find_element(By.XPATH, "//h1[contains(text(), 'Access Denied')]")
@@ -500,7 +501,7 @@ class SOCBot:
         except NoSuchElementException:
             logging.info("✅ Success: no access denied issue")
 
-    def login_failed_check(self):
+    def login_failed_check(self) -> None:
         # check for login issue
         try:
             # check if li tag with parent div[contains(@class, 'text-danger')] contains any text
@@ -530,7 +531,7 @@ class SOCBot:
         
         return SOC_id
     
-    def run_automation(self):
+    def run_automation(self) -> None:
         try:
             self.driver.maximize_window()
             self.driver.get(self.base_link)
