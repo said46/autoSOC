@@ -11,26 +11,24 @@ from selenium.common.exceptions import (
     NoSuchElementException, TimeoutException, ElementNotInteractableException,
     NoSuchWindowException, StaleElementReferenceException
 )
+from selenium.webdriver.chrome.options import Options
 import ctypes
 import time
 import openpyxl as xl
-import logging
+import sys
 
-logging.basicConfig(
-    filename='autoSOC.log', 
-    filemode="w", 
-    level=logging.INFO,
-    format='%(asctime)s -  %(levelname)s -  %(message)s'
-)
+import logging
+from logging_setup import logging_setup
 
 class autoSOC:
     def __init__(self):
+        logging_setup()
         self.driver = None
         self.user_name = None
         self.password = None
         self.time_delay = None
         self.SOC_id = None
-        self.list_of_overrides = []
+        self.list_of_overrides: list[dict[str, str]] = [] # A list of dictionaries where each dictionary represents an override.
         self.msg_title = "Что-то пошло не так, скрипт будет завершен..."
         self.SOC_base_link = "http://eptw.sakhalinenergy.ru/SOC/EditOverrides/"
     
@@ -38,6 +36,25 @@ class autoSOC:
         """Display Windows message box"""
         return ctypes.windll.user32.MessageBoxW(0, text, title, style)
     
+    def create_driver(self) -> WebDriver:
+        options = Options()
+        options.add_experimental_option("excludeSwitches", ["enable-logging"])
+        #options.add_argument("--headless=new")
+        options.add_argument("--log-level=3")
+        options.add_argument("--silent")
+        options.add_argument("--disable-dev-shm-usage")        
+        return webdriver.Chrome(options=options)
+    
+    def initialize_driver(self):
+        """Initialize Chrome WebDriver"""
+        try:
+            self.driver = self.create_driver()
+            self.driver.maximize_window()
+            logging.info("✅ WebDriver initialized successfully")
+        except Exception as e:
+            logging.error(f"❌ Error initializing WebDriver: {e}")
+            raise
+
     def load_config_from_excel(self):
         """Load configuration from Excel file"""
         try:
@@ -72,35 +89,13 @@ class autoSOC:
             # Load SOC ID
             self.SOC_id = str(sheet.cell(1, 12).value)
             
-            logging.info("✓ Configuration loaded successfully from Excel")
+            logging.info("✅ Configuration loaded successfully from Excel")
             
         except Exception as e:
             logging.error(f"❌ Error loading configuration from Excel: {e}")
-            self.message_box("Error", f"Failed to load configuration: {e}", 0)
+            self.message_box("Error", f"❌ Failed to load configuration from Excel", 0)
             raise
-    
-    def initialize_driver(self):
-        """Initialize Chrome WebDriver"""
-        try:
-            self.driver = webdriver.Chrome()
-            self.driver.maximize_window()
-            logging.info("✓ WebDriver initialized successfully")
-        except Exception as e:
-            logging.error(f"❌ Error initializing WebDriver: {e}")
-            raise
-    
-    def switch_lang_if_not_eng(self):
-        """Switch to English if not already selected"""
-        xpath = "//img[contains(@src,'/images/gb.jpg')]"
-        try:
-            self.driver.find_element(By.XPATH, xpath)
-            logging.info("switch_lang_if_not_eng: English! Good!")
-            return
-        except NoSuchElementException:
-            logging.info("switch_lang_if_not_eng: Not English! Not Good!")
-            # FUTURE: switch to English here
-            return
-    
+      
     def is_menu_item_already_selected(self, parent_id, menu_item_text):
         """Check if menu item is already selected"""
         item_xpath = (
@@ -170,7 +165,7 @@ class autoSOC:
                 "//button[@type='submit' and @class='panel-line-btn btn-sm k-button k-primary']"
             ).click()
             
-            logging.info("✓ Login completed successfully")
+            logging.info("✅ Login completed successfully")
             
         except Exception as e:
             logging.error(f"❌ Error during login: {e}")
@@ -180,15 +175,15 @@ class autoSOC:
         """Navigate to Edit Overrides page"""
         try:
             self.driver.get(self.SOC_base_link + self.SOC_id)
-            logging.info(f"✓ Navigated to Edit Overrides page for SOC {self.SOC_id}")
+            logging.info(f"👆 Navigated to Edit Overrides page for SOC {self.SOC_id}")
             
             # Check if SOC is locked
             try:
                 li_locked = self.driver.find_element(By.XPATH, "//li[contains(text(), 'Locked')]")
-                self.message_box('SOC is locked, the script will be terminated', li_locked.text, 0)
+                self.message_box('❌ SOC is locked, the script will be terminated', li_locked.text, 0)
                 self.quit()
             except NoSuchElementException:
-                pass
+                logging.info("✅ Success: SOC is not locked")
             
             # Check for Access Denied
             try:
@@ -199,13 +194,13 @@ class autoSOC:
                 )
                 self.quit()
             except NoSuchElementException:
-                pass
+                logging.info("✅ Success: no access denied issue")
                 
         except Exception as e:
             logging.error(f"❌ Error navigating to Edit Overrides: {e}")
             raise
     
-    def add_override(self, override):
+    def add_override(self, override: dict[str, str]) -> None:
         """Add a single override to the SOC"""
         try:
             # Enter Tag Number and Description
@@ -259,7 +254,7 @@ class autoSOC:
             # Click Add button
             self.driver.find_element(By.ID, "AddOverrideBtn").click()
             
-            logging.info(f"✓ Added override: {override['TagNumber']}")
+            logging.info(f"✅ Added override: {override['TagNumber']}")
             
         except Exception as e:
             logging.error(f"❌ Error adding override {override.get('TagNumber', 'Unknown')}: {e}")
@@ -272,7 +267,7 @@ class autoSOC:
                 logging.info(f"Processing override {i}/{len(self.list_of_overrides)}: {override['TagNumber']}")
                 self.add_override(override)
             
-            logging.info("✓ All overrides processed successfully")
+            logging.info("✅ All overrides processed successfully")
             
         except Exception as e:
             logging.error(f"❌ Error processing overrides: {e}")
@@ -302,7 +297,7 @@ class autoSOC:
         """Cleanup and quit the driver"""
         if self.driver:
             self.driver.quit()
-            logging.info("✓ WebDriver closed")
+            logging.info("✅ WebDriver closed")
 
 
 # Main execution
