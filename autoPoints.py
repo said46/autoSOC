@@ -63,7 +63,7 @@ class SOCBot:
                 raise
             except Exception as e:
                 # return False if element not found or other errors, log the exception text
-                logging.info(f"{str(e)}")
+                logging.info(f"❌ {str(e)}")
                 return False
 
     def __init__(self):
@@ -154,13 +154,13 @@ class SOCBot:
     # the function checks label "Состояние: ***** on the SOC details web page and return the status
     def check_SOC_status(self) -> str:    
         script = """
-        return document.evaluate(
-            "//label[normalize-space()='Состояние']/following-sibling::text()[1]",
-            document,
-            null,
-            XPathResult.STRING_TYPE,
-            null
-        ).stringValue.trim();
+            return document.evaluate(
+                "//label[normalize-space()='Состояние']/following-sibling::text()[1]",
+                document,
+                null,
+                XPathResult.STRING_TYPE,
+                null
+            ).stringValue.trim();
         """
         try:
             status = self.driver.execute_script(script)
@@ -227,43 +227,44 @@ class SOCBot:
        
         try:
             if locator:
-                if (isinstance(locator, tuple)):
-                    by, value = locator
-                    if by == By.XPATH:
-                        js_code = """
-                            function getElementBy(path) 
-                            {
-                                return document.evaluate(
-                                    path,
-                                    document,
-                                    null,                    
-                                    XPathResult.FIRST_ORDERED_NODE_TYPE, // The desired result type (e.g., FIRST_ORDERED_NODE_TYPE for a single node)
-                                    null
-                                ).singleNodeValue; // Returns the single node found, or null if none
-                            }
-
-                            const parent_element = getElementBy(arguments[1]);
-                            const div = document.createElement('div');
-                            div.textContent = arguments[0];
-                            div.style.fontSize = "16px"
-                            div.style.color = "red";
-                            div.style.fontWeight = 'bold';
-                            div.style.display = 'inline-block';
-                            div.style.position = 'relative';
-                            div.style.textAlign = 'center';
-                            div.style.width = "100%"
-                            parent_element.insertBefore(div, parent_element.firstChild);
-                        """
-                    else:
-                        raise NotImplementedError("Only XPath is supported")
-                else:
-                    raise ValueError("Only tuple is supported")
+                if not isinstance(locator, tuple) or len(locator) != 2:
+                    raise ValueError("locator must be a tuple (by, value)")
             
-                try:
-                    self.driver.execute_script(js_code, msg_text, value)
-                except Exception as e:
-                    logging.error(f"❌ Failed to inject Error Message with XPATH={value}: {str(e)}")
+                by, value = locator
+                if by != By.XPATH:
+                    raise NotImplementedError("Only XPath is supported")
+
+                js_code = """
+                    function getElementBy(path) 
+                    {
+                        return document.evaluate(
+                            path,
+                            document,
+                            null,                    
+                            XPathResult.FIRST_ORDERED_NODE_TYPE, // The desired result type (e.g., FIRST_ORDERED_NODE_TYPE for a single node)
+                            null
+                        ).singleNodeValue; // Returns the single node found, or null if none
+                    }
+
+                    const parent_element = getElementBy(arguments[1]);
+                    const div = document.createElement('div');
+                    div.style.cssText = `
+                        font-size: 16px;
+                        color: red;
+                        font-weight: bold;
+                        display: inline-block;
+                        position: relative;
+                        text-align: center;
+                        width: 100%;
+                    `;
+                    div.textContent = arguments[0];
+                    parent_element.insertBefore(div, parent_element.firstChild);
+                """
+
+                self.driver.execute_script(js_code, msg_text, value)
+
             else:
+                # Absolute positioning
                 js_code = """
                     const div = document.createElement('div');
                     div.style.cssText = `
@@ -282,18 +283,16 @@ class SOCBot:
                     document.body.appendChild(div);
                 """
                 
-                try:
-                    self.driver.execute_script(js_code, msg_text)
-                except NoSuchWindowException as e:
-                    logging.error(f"👆 User closed the browser window.")
-                    self.safe_exit()            
-                except Exception as e:
-                    logging.error(f"❌ Failed to inject Error Message with absolute positioning: {str(e)}")
-                    self.safe_exit()
+                self.driver.execute_script(js_code, msg_text)
+            
+            logging.info("✅ Error message injected successfully")
+        
+        except NoSuchWindowException as e:
+            logging.error(f"👆 User closed the browser window.")
+            self.safe_exit()            
         except Exception as e:
             logging.error(f"❌ Failed to inject error message: {e}")
            
-
         # Waiting logic
         if self._is_browser_closed():
             logging.info("✅ Browser already closed - instant exit")
@@ -302,7 +301,7 @@ class SOCBot:
             logging.info(f"⏳ Browser open - waiting up to {self.MAX_WAIT_USER_INPUT_DELAY_SECONDS} seconds for user to close it")
             self._wait_for_browser_to_close()
 
-    def inject_info_message(self, msg_text="message is not defined", locator=None):
+    def inject_info_message(self, msg_text="message is not defined", locator=None) -> None:
         # after updating all the points with the current role we need to inform the user that he/she should press 
         # the confirm button to proceed. We inject the text information to the left of the buttons using JavaScript
 
@@ -340,11 +339,14 @@ class SOCBot:
         try:
             self.driver.execute_script(js_code, msg_text, value)
             logging.info(f"✅ Info message injected successfully")
+        except NoSuchWindowException:
+            logging.warning(f"⚠️  Browser windows was closed, end of script")
+            self.safe_exit()         
         except Exception as e:
             logging.error(f"❌ Failed to inject info message: {e}")
             self.inject_error_message(f"❌ Failed to info message, the script cannot proceed, close this window.")
     
-    def inject_SOC_id_input(self):
+    def inject_SOC_id_input(self) -> None:
         try:
             # JS code to inject SOC_id input field into the login web page
             js_code = """
@@ -359,24 +361,117 @@ class SOCBot:
                 input.focus();
             """
             self.driver.execute_script(js_code)
+        except NoSuchWindowException:
+            logging.warning(f"⚠️  Browser windows was closed, end of script")
+            self.safe_exit()                 
         except Exception as e:
             logging.error(f"❌ Failed to inject SOC_id input field into the login web page: {e}")
             self.inject_error_message(f"❌ Failed to inject SOC_id input field, the script cannot proceed, close this window.")
 
-    def switch_role(self, role: str):
+    def wait_for_kendo_dropdown(self, element_id: str, timeout: int = 10) -> None:
+        """
+        Wait for a Kendo UI DropDownList to be initialized and ready
+        """
+        WebDriverWait(self.driver, timeout).until(
+            lambda driver: driver.execute_script(
+                f"return typeof jQuery !== 'undefined' && jQuery('#{element_id}').data('kendoDropDownList') !== undefined;"
+            )
+        )
+
+    def switch_role(self, role: str) -> None:
         try:
-            # first, open the role change web page
             self.driver.get(self.base_link + r"User/ChangeRole")
-            # find the invisible input field used by the web page script to remember the chosen short role (like OAC, OAV)
-            input_text = self.driver.find_element(By.ID, 'CurrentRoleName')
-            # change the value of the found field to requited value ("OAC", "OAV" and etc.)
-            self.driver.execute_script(f'arguments[0].value="{role}"', input_text)
-            # press the confirm button
+            
+            # Wait for Kendo components to initialize
+            self.wait_for_kendo_dropdown("CurrentRoleName")
+            
+            # Set value using Kendo API
+            set_role_script = f"""
+                var dropdown = $('#CurrentRoleName').data('kendoDropDownList');
+                dropdown.value('{role}');
+                dropdown.trigger('change');
+                return true;
+            """
+            self.driver.execute_script(set_role_script)
+            
+            # Wait for the value to actually change in the Kendo component
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: driver.execute_script(
+                    f"return $('#CurrentRoleName').data('kendoDropDownList').value() === '{role}';"
+                )
+            )
+            
             self.click_button((By.ID, 'ConfirmHeader'))            
+            
             logging.info(f"✅ The role switched to {role} successfully")
+        except NoSuchWindowException:
+            logging.warning(f"⚠️  Browser windows was closed, end of script")
+            self.safe_exit()           
         except Exception as e:
             logging.error(f"❌ Failed to switch the role: {e}")
             self.inject_error_message(f"❌ Failed to switch the role, the script cannot proceed, close this window.")
+
+    def accept_SOC_to_apply(self) -> None:
+            try:
+                # Wait for Kendo components to initialize
+                self.wait_for_kendo_dropdown("ActionsList")
+                
+                # Build the value in Python and pass as a complete string
+                action_value = f'/Soc/TriggerChangeWorkflowState/{self.SOC_id}?trigger=AcceptForApply'
+                
+                set_action_script = """
+                    var dropdown = $('#ActionsList').data('kendoDropDownList');
+                    dropdown.value(arguments[0]);
+                    dropdown.trigger('change');
+                """
+                
+                self.driver.execute_script(set_action_script, action_value)
+                
+                # Wait for value to be set
+                WebDriverWait(self.driver, 10).until(
+                    lambda driver: driver.execute_script(
+                        "return $('#ActionsList').data('kendoDropDownList').value() === arguments[0];",
+                        action_value
+                    )
+                )
+                
+                self.click_button((By.ID, 'ApplyActionButton'))
+                
+                logging.info(f"✅ SOC {self.SOC_id} has been accepted for apply successfully")
+                
+            except NoSuchWindowException:
+                logging.warning(f"⚠️  Browser windows was closed, end of script")
+                self.safe_exit()
+            except Exception as e:
+                logging.error(f"❌ Failed to accept the SOC {self.SOC_id} for apply: {e}")
+                self.inject_error_message(f"❌ Failed to accept the SOC {self.SOC_id} for apply, the script cannot proceed, close this window.")
+
+    def update_points(self):
+        # Kendo API approach failed (becomes too complicated), because the Kendo dropdowns are created dynamically 
+        # by the updateOverrideFunctions.onGridDataBound() function, but they're not initialized yet when our script runs.
+        try:
+            # change the value of Confirm Current State dropdown list for each point, for that
+            # find all the elements with id=CurrentStateSelect that are not disabled
+            item_xpath = f"//select[@id='CurrentStateSelect' and not(@disabled)]"
+            sel_items = self.driver.find_elements(By.XPATH, item_xpath)
+            logging.info(f"Number of points to update is {len(sel_items)}")
+            # for each dropdown list
+            for point_index, sel_item in enumerate(sel_items, start=1):
+                # select the dropdown list
+                drop = Select(sel_item)
+                try:
+                    # check if the dropdown list contains more than a single item
+                    if len(drop.options) > 1:
+                    # and choose the second value
+                        drop.select_by_index(1)
+                        selected_text = drop.first_selected_option.text
+                        logging.info(f"✅ Point {point_index} has been updated to {selected_text}")
+                except Exception as e:
+                    logging.warning(f"⚠️  Точка не обновлена: {str(e)}")
+                    message_box("⚠️  Точка не обновлена", f"{str(e)}", 0)
+        except NoSuchElementException as e:
+            logging.error(f"❌ Failed to update points: {e}")
+            self.inject_error_message(f"❌ Failed to update some points, the script cannot proceed, close this window.")
 
     def SOC_details_opened_check(self):
         # check for 404 error, it takes place when SOC_id does not exist
@@ -413,46 +508,7 @@ class SOCBot:
             logging.error("❌ Login issue, check the password in ini-file.")
             self.inject_error_message("❌ Login issue, check the password in ini-file, the script cannot proceed, close this window")
         except NoSuchElementException:
-            logging.info("✅ Success: no login issue")            
-
-    def accept_SOC_to_apply(self):
-        try:
-            # accept the SOC for apply, for that
-            # find invisible input field used by the web page script to remember the required action    
-            input_text = self.driver.find_element(By.ID, 'ActionsList')
-            # force the value of this input field to AcceptForApply
-            self.driver.execute_script(f'arguments[0].value="/Soc/TriggerChangeWorkflowState/{self.SOC_id}?trigger=AcceptForApply"', input_text)    
-            # and click the GO button            
-            self.click_button((By.ID, 'ApplyActionButton'))
-            logging.info(f"✅ SOC {self.SOC_id} has been accepted for apply successfully")
-        except Exception as e:
-            logging.error(f"❌ Failed to accept the SOC {self.SOC_id} for apply: {e}")
-            self.inject_error_message(f"❌ Failed to accept the SOC {self.SOC_id} for apply, the script cannot proceed, close this window.")
-
-    def update_points(self):
-        try:
-            # change the value of Confirm Current State dropdown list for each point, for that
-            # find all the elements with id=CurrentStateSelect that are not disabled
-            item_xpath = f"//select[@id='CurrentStateSelect' and not(@disabled)]"
-            sel_items = self.driver.find_elements(By.XPATH, item_xpath)
-            logging.info(f"Number of points to update is {len(sel_items)}")
-            # for each dropdown list
-            for point_index, sel_item in enumerate(sel_items, start=1):
-                # select the dropdown list
-                drop = Select(sel_item)
-                try:
-                    # check if the dropdown list contains more than a single item
-                    if len(drop.options) > 1:
-                    # and choose the second value
-                        drop.select_by_index(1)
-                        selected_text = drop.first_selected_option.text
-                        logging.info(f"✅ Point {point_index} has been updated to {selected_text}")
-                except Exception as e:
-                    logging.warning(f"⚠️ Точка не обновлена: {str(e)}")
-                    message_box("⚠️ Точка не обновлена", f"{str(e)}", 0)
-        except NoSuchElementException as e:
-            logging.error(f"❌ Failed to update points: {e}")
-            self.inject_error_message(f"❌ Failed to update some points, the script cannot proceed, close this window.")
+            logging.info("✅ Success: no login issue")             
                   
     def request_DB_for_SOC_id(self, SOC_id: str) -> str:
         SQL = self.SQL_template.format(soc_id=SOC_id)
@@ -473,7 +529,6 @@ class SOCBot:
             raise ValueError(f"{SOC_id} has to be string with len 7 or 8")
         
         return SOC_id
-
     
     def run_automation(self):
         try:
@@ -484,12 +539,16 @@ class SOCBot:
             self.inject_error_message(f"❌ Cannot access {self.base_link}. Check network connection.")
 
         # login
-        self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
-        self.driver.find_element(By.ID, "Password").send_keys(self.password)
+        try:
+            self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
+            self.driver.find_element(By.ID, "Password").send_keys(self.password)
+        except NoSuchElementException:
+            logging.error(f"❌ Failed to find 'Username' or 'Password' fields: {e}")
+            self.inject_error_message(f"❌ Failed to find 'Username' or 'Password' fields, the script cannot proceed, close this window.")            
 
         self.inject_SOC_id_input()
 
-        # the script will wait for MAX_WAIT_USER_INPUT_DELAY_SECONDS minutes until the SOC_id in the injected input field corresponds to the template
+        # the script will wait for MAX_WAIT_USER_INPUT_DELAY_SECONDS until the SOC_id in the injected input field corresponds to the template
         pattern = re.compile(self.SOC_ID_PATTERN)
         try:
             WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
@@ -539,17 +598,15 @@ class SOCBot:
         SOC_status = self.check_SOC_status()
 
         # if SOC_status == "approved for apply", there is a need to change the role to OAC and accept the SOC for apply
-        SOC_status_approved_for_apply = self.SOC_status_approved_for_apply
-        if SOC_status == SOC_status_approved_for_apply:
+        if SOC_status == self.SOC_status_approved_for_apply:
             # switch the role to OAC
             self.switch_role('OAC')
             # open SOC details web page - not sure it is necessary, as it will be opened automatically after changing the role
             self.driver.get(SOC_view_base_link + self.SOC_id)
             self.accept_SOC_to_apply()
 
-            time.sleep(1)
-            # xpath = "//label[normalize-space()='Состояние']"
-            # WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(EC.presence_of_element_located((By.XPATH, xpath)))
+            # Wait for the status to DIFFER from the previous value
+            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(lambda _: self.check_SOC_status() != SOC_status)
 
         SOC_status = self.check_SOC_status()
 
@@ -571,19 +628,23 @@ class SOCBot:
             self.SOC_locked_check()
             self.access_denied_check()
 
-            #time.sleep(1)
-            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(EC.presence_of_element_located((By.ID, "CurrentStateSelect")))
+            # Wait for several points to be loaded and ready
+            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
+                lambda driver: len(driver.find_elements(By.XPATH, "//select[@id='CurrentStateSelect' and not(@disabled)]")) >= 1
+            )            
+            # update all points
             self.update_points()
             
-            msg = '⚠️ Скрипт ожидает нажатия кнопки "Подтвердить".'
+            msg = '⚠️  Скрипт ожидает нажатия кнопки "Подтвердить".'
             xpath = "//div[@id='bottomWindowButtons']/div"
             self.inject_info_message(msg, (By.XPATH, xpath))
             try:
                 # after injecting the text, the script waits for MAX_WAIT_USER_INPUT_DELAY_SECONDS minutes for the web page title to be changed
                 # to "СНД - Домашняя страница", to ensure the user pressed the confirm button
                 WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(EC.title_is("СНД - Домашняя страница"))
+                logging.info("🏁  End of script")
             except NoSuchWindowException as e:
-                logging.error(f"User closed the browser window.")
+                logging.error(f"⚠️  User closed the browser window.")
                 self.safe_exit()
             except Exception as e:
                 logging.error(f"❌ Failed to wait for user input ('Confirm' button): {e}")
