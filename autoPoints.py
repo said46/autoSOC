@@ -463,15 +463,17 @@ class SOCBot(BaseWebBot):
     def accept_SOC_to_apply(self) -> None:
         """Accept SOC for apply and wait for status change"""
         try:
-            # Get current status before applying
             old_status = self.check_SOC_status()
             logging.info(f"⏳ Current SOC status: '{old_status}' - proceeding with accept for apply")
             
             # Wait for Kendo components to initialize
+            logging.info("⏳ Waiting for ActionsList dropdown...")
             self.wait_for_kendo_dropdown("ActionsList")
+            logging.info("✅ ActionsList dropdown ready")
             
             # Build the action value
             action_value = f'/Soc/TriggerChangeWorkflowState/{self.SOC_id}?trigger=AcceptForApply'
+            logging.info(f"🔧 Setting action value: {action_value}")
             
             # Set dropdown value
             set_action_script = """
@@ -480,17 +482,22 @@ class SOCBot(BaseWebBot):
                 dropdown.trigger('change');
             """
             self.driver.execute_script(set_action_script, action_value)
+            logging.info("✅ Action value set in dropdown")
             
             # Wait for value to be set
+            logging.info("⏳ Verifying dropdown value was set...")
             WebDriverWait(self.driver, 10).until(
                 lambda _: self.driver.execute_script(
                     "return $('#ActionsList').data('kendoDropDownList').value() === arguments[0];",
                     action_value
                 )
             )
+            logging.info("✅ Dropdown value verified")
             
             # Click apply button
+            logging.info("⏳ Clicking ApplyActionButton...")
             self.click_button((By.ID, 'ApplyActionButton'))
+            logging.info("✅ Apply button clicked")
             
             # Wait for status to actually change
             logging.info(f"⏳ Waiting for status to change from '{old_status}'...")
