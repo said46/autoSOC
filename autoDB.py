@@ -1,4 +1,5 @@
 import pymssql
+import logging
 from typing import Optional, List, Dict, Any
 
 class SQLQueryDirect:
@@ -25,7 +26,7 @@ class SQLQueryDirect:
                     password=self.password,
                     port=self.port
                 )
-                print("✅ Direct connection established successfully")
+                logging.info("✅ Direct connection to DB established successfully")
             except Exception as e:
                 raise RuntimeError(f"Failed to create database connection: {e}") from e
         return self._connection
@@ -45,7 +46,7 @@ class SQLQueryDirect:
             for row in cursor.fetchall():
                 results.append(dict(zip(columns, row)))
             
-            print(f"✅ Query executed successfully. Retrieved {len(results)} rows.")
+            logging.info(f"✅ Query executed successfully. Retrieved {len(results)} rows.")
             return results
             
         except Exception as e:
@@ -67,7 +68,7 @@ class SQLQueryDirect:
         if self._connection is not None:
             self._connection.close()
             self._connection = None
-            print("🔌 Database connection closed.")
+            logging.info("🔌 Database connection closed.")
 
     def __enter__(self):
         return self
