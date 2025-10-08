@@ -55,13 +55,7 @@ class BaseWebBot:
         # Common settings
         self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
 
-
-        # Decode password
-        encoded_password = config.get('Settings', 'password', fallback='******')
-        try:
-            self.password = base64.b64decode(encoded_password.encode()).decode()
-        except:
-            self.password = encoded_password  # Fallback to plain text              
+        self.password = self.process_password(config.get('Settings', 'password'))
         
         self.base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
@@ -84,7 +78,7 @@ class BaseWebBot:
             if hasattr(self, 'driver') and self.driver:
                 self.driver.quit()
         except Exception as e:
-            logging.error(f"❌ Error during cleanup: {e}")
+            logging.error(f"❌ Error during cleanup: {str(e)}")
         finally:
             sys.exit()
     
@@ -133,7 +127,7 @@ class BaseWebBot:
             )
             element.click()
         except Exception as e:
-            logging.error(f"❌ Failed to click element with locator {locator}: {e}")
+            logging.error(f"❌ Failed to click element with locator {locator}: {str(e)}")
             raise
         
     def inject_error_message(self, msg_text: str, locator: tuple[str, str] = None, 
@@ -188,7 +182,7 @@ class BaseWebBot:
             logging.warning("⚠️  Browser window was closed")
             self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Failed to inject message: {e}")
+            logging.error(f"❌ Failed to inject message: {str(e)}")
     
     def _get_injection_js_code(self, msg_text: str, xpath: str, position: str, style_addons: StyleAddons = None) -> str:
         """Generate JavaScript code for message injection"""
@@ -265,52 +259,67 @@ class SOCBot(BaseWebBot):
     EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"
     ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
     
-    
-    class WaitForValueToMatchTemplate:
-        """
-        Callable class to wait until an element's value matches a given template.
-        
-        Args:
-            locator: Tuple (e.g., (By.ID, "my_id")) to locate the element.
-            template: Expected value template. Can be:
-                      - A string (exact match)
-                      - A compiled regex pattern (using re.compile)
-        """
-        def __init__(self, locator, template):
+    # callable class
+    class WaitForSOCInput:
+        """SOCBot-specific wait condition for SOC input"""
+        def __init__(self, locator, soc_bot):
             self.locator = locator
-            self.template = template
+            self.soc_bot = soc_bot
+            self.last_value = ""
 
         def __call__(self, driver):
             try:
-                element = driver.find_element(*self.locator)
-                value = element.get_attribute("value")  # For input fields
-                
-                # Handle string template (exact match)
-                if isinstance(self.template, str):
-                    return value == self.template
-                
-                # Handle regex template
-                elif hasattr(self.template, 'match'):
-                    return self.template.match(value) is not None
-                
-                # Optional: Add other template types (e.g., partial match)
-                else:
-                    raise ValueError("❌ Template must be a string or compiled regex pattern")
+                # Browser closure check
+                if self.soc_bot._is_browser_closed():
+                    return True  # Return True to stop waiting and continue
                     
-            except NoSuchWindowException as e:
-                logging.info(f"⚠️  The browser was closed while waiting for user input")
-                # Note: safe_exit is now on SOCBot instance, but this class is standalone
-                # We leave this as-is to avoid deeper refactoring per your request
-                raise
-            except Exception as e:
-                # return False if element not found or other errors, log the exception text
-                logging.info(f"❌ {str(e)}")
+                injected_input = driver.find_element(*self.locator)
+                current_value = injected_input.get_attribute("value")
+                
+                if current_value != self.last_value:
+                    is_valid, message = self.soc_bot._validate_soc_input(current_value)
+                    self.soc_bot._update_input_ui(is_valid, message)
+                    self.last_value = current_value
+                
+                enter_pressed = injected_input.get_attribute('data-enter-pressed') == 'true'
+                if enter_pressed:
+                    is_valid, message = self.soc_bot._validate_soc_input(current_value)
+                    self.soc_bot._update_input_ui(is_valid, message)
+                    
+                    if is_valid:
+                        driver.execute_script("""
+                            var input = document.getElementById('InjectedInput');
+                            input.removeAttribute('data-enter-pressed');
+                            input.disabled = true;
+                        """)
+                        return True
+                    else:
+                        self.soc_bot._update_input_ui(False, "❌ Invalid - " + message.split('⚠️ ')[-1])
+                        driver.execute_script("""
+                            var input = document.getElementById('InjectedInput');
+                            input.removeAttribute('data-enter-pressed');
+                        """)
+                
                 return False
-    
+            except (NoSuchWindowException, WebDriverException):
+                # Browser closed - return True to break the wait
+                return True
+
     def __init__(self):
         super().__init__('autoPoints.ini')
         self.warning_message: str | None = None
         self.load_soc_specific_config()        
+    
+    def process_password(self, password: str) -> str:
+        # Decode password
+        encoded_password = password
+
+        try:
+            logging.info(f"🔐 Password decoded successfully")
+            return base64.b64decode(password.encode()).decode()
+        except Exception as e:
+            logging.error(f"🔐 Failed to decode password: {str(e)}, using plain text password")
+            return encoded_password  # Fallback to plain text
     
     def load_soc_specific_config(self):
         """Load SOC-specific configuration"""
@@ -323,6 +332,8 @@ class SOCBot(BaseWebBot):
             'good_statuses', 
             fallback='принято для установки-запрошено для удаления-установлено, не подтверждено-удалено, не подтверждено').split('-')
         self.SOC_status_approved_for_apply = config.get('Statuses', 'SOC_status_approved_for_apply', fallback='одобрено для установки')
+        self.roles = {config.get('Roles', 'OAC', fallback='Исполняющий форсирование'): 'OAC', 
+                      config.get('Roles', 'OAV', fallback='Проверяющий форсирование'): 'OAV'}
                       
         self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = config.getboolean('Database', 'CONNECT_TO_DB_FOR_PARTIAL_SOC_ID', fallback=False)
                            
@@ -330,10 +341,10 @@ class SOCBot(BaseWebBot):
         if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
             try:
                 self.db_server = config.get('Database', 'server')
+                self.db_password = self.process_password(config.get('Database', 'password'))
                 self.db_database = config.get('Database', 'database') 
                 self.db_username = config.get('Database', 'username')
-                self.db_password = config.get('Database', 'password')
-                
+                                
                 # Validate none are empty
                 if not all([self.db_server, self.db_database, self.db_username]):
                     raise configparser.NoOptionError('Database', 'Some database credentials are empty')
@@ -344,7 +355,7 @@ class SOCBot(BaseWebBot):
             
             except (configparser.NoSectionError, configparser.NoOptionError) as e:            
                 self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = False
-                self.warning_message = f"⚠️  Database configuration incomplete: {e}. Disabling database features."
+                self.warning_message = f"⚠️  Database configuration incomplete: {str(e)}. Disabling database features."
                 logging.warning(self.warning_message)
             except ValueError as e:
                 self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = False
@@ -352,11 +363,9 @@ class SOCBot(BaseWebBot):
                 logging.warning(self.warning_message)        
 
         if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
-            self.SOC_ID_PATTERN = r"^\d{4,8}\+$"
-            self.warning_message = "✅  Database features are on in ini-file, you can use partial SOC id starting from 4 digits"
+            self.SOC_ID_PATTERN = r"^\d{4,8}$"
         else:
-            self.SOC_ID_PATTERN = r"^\d{7,8}\+$"
-            self.warning_message = "⚠️  Database features are off in ini-file, use full SOC id."
+            self.SOC_ID_PATTERN = r"^\d{7,8}$"
     
     # SOC-specific methods that now use base class error handling
     def check_SOC_status(self) -> str:    
@@ -376,30 +385,125 @@ class SOCBot(BaseWebBot):
             logging.info(f"👆 SOC {self.SOC_id} status: '{status}'")
             return status.lower()
         except Exception as e:
-            logging.error(f"❌ Failed to get SOC status: {e}")        
-            self.inject_error_message(f"❌ Failed to get SOC status: {e}")
+            logging.error(f"❌ Failed to get SOC status: {str(e)}")        
+            self.inject_error_message(f"❌ Failed to get SOC status: {str(e)}")
             return ''
     
     def inject_SOC_id_input(self) -> None:
         try:
+            # JavaScript to create the SOC id input field
             js_code = """
+                var container = document.createElement('div');
+                container.style.cssText = 'margin-top: 10px;';
+                
                 var input = document.createElement('input');
                 input.type = 'text';
                 input.id = 'InjectedInput';
-                input.placeholder = 'Enter SOC number';
-                input.className = "form-control control-lg"
-                input.style.marginTop = "5px"
+                input.className = "form-control control-lg";
+                input.style.marginBottom = "5px";
+                input.style.width = "100%";
+                
+                // Hide the original submit button AND prevent form submission
+                var submitButton = document.querySelector('button[type="submit"]');
+                if (submitButton) submitButton.style.display = 'none';
+                
+                // Prevent form submission on Enter in any field
+                var form = document.querySelector('form');
+                if (form) {
+                    form.addEventListener('keypress', function(e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                        }
+                    });
+                }
+                
+                container.appendChild(input);
                 const referenceElement = document.getElementById('Password');
-                referenceElement.insertAdjacentElement('afterend', input);
+                referenceElement.insertAdjacentElement('afterend', container);
                 input.focus();
             """
             self.driver.execute_script(js_code)
+            
+            # Now use Python to add the guide text and set up monitoring
+            self._setup_input_monitoring()
+            
         except NoSuchWindowException:
-            logging.warning(f"⚠️  Browser windows was closed, end of script")
+            logging.warning(f"🏁  Browser windows was closed, end of script")
             self.safe_exit()                 
         except Exception as e:
-            logging.error(f"❌ Failed to inject SOC_id input field into the login web page: {e}")
+            logging.error(f"❌ Failed to inject SOC_id input field: {str(e)}")
             self.inject_error_message(f"❌ Failed to inject SOC_id input field")
+
+    def _update_input_ui(self, is_valid: bool, message: str) -> None:
+        """Update the input field UI based on validation result"""
+        try:
+            color = 'green' if is_valid else 'orange'
+            border_color = 'green' if is_valid else 'orange'
+            
+            js_code = f"""
+                var input = document.getElementById('InjectedInput');
+                var guideText = document.getElementById('InjectedGuideText');
+                
+                if (input) {{
+                    input.style.borderColor = '{border_color}';
+                    input.style.borderWidth = '{'2px' if border_color else ''}';
+                }}
+                
+                if (guideText) {{
+                    guideText.textContent = '{message}';
+                    guideText.style.color = '{color}';
+                }}
+            """
+            self.driver.execute_script(js_code)
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to update input UI: {str(e)}")
+
+    def _setup_input_monitoring(self) -> None:
+        """Set up Python-based input monitoring and validation"""
+        try:
+            # Add guide text using Python
+            guide_js = """
+                var guideText = document.createElement('div');
+                guideText.id = 'InjectedGuideText';
+                guideText.style.cssText = 'font-size: 12px; color: #666; margin-top: 5px; text-align: center;';
+                guideText.textContent = '☝ Enter SOC number and press Enter';
+                
+                var input = document.getElementById('InjectedInput');
+                input.parentNode.appendChild(guideText);
+            """
+            self.driver.execute_script(guide_js)
+            
+            # Set up Enter key listener with prevention of default behavior
+            enter_listener_js = """
+                document.getElementById('InjectedInput').addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault(); // ⚠️ CRITICAL: Prevent form submission
+                        e.stopPropagation(); // ⚠️ Prevent event bubbling
+                        this.setAttribute('data-enter-pressed', 'true');
+                    }
+                });
+            """
+            self.driver.execute_script(enter_listener_js)
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to set up input monitoring: {str(e)}")
+
+    def _validate_soc_input(self, value: str) -> tuple[bool, str]:
+        """Validate SOC input and return (is_valid, message)"""
+        value = value.strip()
+        
+        if not value:
+            return False, "⚠️ Empty value is not allowed"
+                            
+        # Check against the full pattern
+        pattern = re.compile(self.SOC_ID_PATTERN)
+        min_digits = 4 if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID else 7
+        if not pattern.match(value):
+            return False, f"⚠️ SOC id must to be at least {min_digits} digits"
+        
+        return True, "✅ Valid - Press Enter to continue"
           
     def SOC_details_opened_check(self) -> None:
         try:
@@ -436,8 +540,34 @@ class SOCBot(BaseWebBot):
         except NoSuchElementException:
             logging.info("✅ Success: no login issue")                
     
+    def get_current_role(self) -> str:
+        """Get the current role from the page using the role span element"""
+        try:
+            # Look for the role span with class "k-state-active"
+            role_span = self.driver.find_element(By.XPATH, "//span[@class='k-state-active' and contains(text(), 'Роль:')]")
+            role_text = role_span.text.strip()
+            
+            # Extract just the role name (remove "Роль: " prefix)
+            if "Роль:" in role_text:
+                role_name = role_text.split("Роль:")[1].strip()
+                logging.info(f"👤 Current role detected: '{role_name}'")
+                return self.roles[role_name]
+            else:
+                logging.warning(f"⚠️  Unexpected role text format: '{role_text}'")
+                return "unknown"
+                
+        except NoSuchElementException:
+            logging.warning("⚠️  Role span element not found, cannot determine current role")
+            return "unknown"
+        except Exception as e:
+            logging.warning(f"⚠️  Could not determine current role: {str(e)}")
+            return "unknown"    
+    
     def switch_role(self, role: str) -> None:
         try:
+            if self.get_current_role() == role:
+                logging.info(f"✅ The role is already {role}, no need to switch")
+                return
             self.driver.get(self.base_link + r"User/ChangeRole")
             
             # Wait for Kendo components to initialize
@@ -463,10 +593,10 @@ class SOCBot(BaseWebBot):
             
             logging.info(f"✅ The role switched to {role} successfully")
         except NoSuchWindowException:
-            logging.warning(f"⚠️  Browser windows was closed, end of script")
+            logging.warning(f"🏁  Browser windows was closed, end of script")
             self.safe_exit()           
         except Exception as e:
-            logging.error(f"❌ Failed to switch the role: {e}")
+            logging.error(f"❌ Failed to switch the role: {str(e)}")
             self.inject_error_message(f"❌ Failed to switch the role{self.ERROR_MESSAGE_ENDING}.")
 
     def accept_SOC_to_apply(self) -> None:
@@ -518,10 +648,10 @@ class SOCBot(BaseWebBot):
             logging.info(f"✅ SOC {self.SOC_id} successfully accepted - status changed to '{new_status}'")
             
         except NoSuchWindowException:
-            logging.warning(f"⚠️  Browser window was closed, end of script")
+            logging.warning(f"🏁  Browser window was closed, end of script")
             self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Failed to accept SOC {self.SOC_id} for apply: {e}")
+            logging.error(f"❌ Failed to accept SOC {self.SOC_id} for apply: {str(e)}")
             self.inject_error_message(f"❌ Failed to accept SOC {self.SOC_id} for apply{self.ERROR_MESSAGE_ENDING}.")
 
     def update_points(self):
@@ -548,7 +678,7 @@ class SOCBot(BaseWebBot):
                     logging.warning(f"⚠️  Точка не обновлена: {str(e)}")
                     message_box("⚠️  Точка не обновлена", f"{str(e)}", 0)
         except NoSuchElementException as e:
-            logging.error(f"❌ Failed to update points: {e}")
+            logging.error(f"❌ Failed to update points: {str(e)}")
             self.inject_error_message(f"❌ Failed to update some points{self.ERROR_MESSAGE_ENDING}.")
                    
     def request_DB_for_SOC_id(self, SOC_id: str) -> str:
@@ -584,7 +714,7 @@ class SOCBot(BaseWebBot):
             self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
             self.driver.find_element(By.ID, "Password").send_keys(self.password)
         except NoSuchElementException as e:
-            logging.error(f"❌ Failed to find 'Username' or 'Password' input fields: {e}")
+            logging.error(f"❌ Failed to find 'Username' or 'Password' input fields: {str(e)}")
             self.inject_error_message(f"❌ Failed to find 'Username' or 'Password' input fields {self.ERROR_MESSAGE_ENDING}.")
         
         if self.warning_message:
@@ -592,25 +722,30 @@ class SOCBot(BaseWebBot):
 
         self.inject_SOC_id_input()
 
-        # the script will wait for MAX_WAIT_USER_INPUT_DELAY_SECONDS until the SOC_id in the injected input field corresponds to the template
-        pattern = re.compile(self.SOC_ID_PATTERN)
         try:
+            # the script will wait for MAX_WAIT_USER_INPUT_DELAY_SECONDS until ****
             WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
-                self.WaitForValueToMatchTemplate((By.ID, "InjectedInput"), pattern)
+                self.WaitForSOCInput((By.ID, "InjectedInput"), self)  # Pass self as bot_instance
             )
+            
+            # If browser closed, exit
+            if self._is_browser_closed():
+                logging.info("🏁 Browser closed by user during input")
+                self.safe_exit()
+            
+            logging.info("✅ Valid SOC_id entered - proceeding with authentication")            
         except NoSuchWindowException:
-            logging.warning(f"⚠️  Browser windows was closed, end of script")
+            logging.warning(f"🏁  Browser windows was closed, end of script")
             self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Failed to wait for SOC_id to be entered: {e}")
+            logging.error(f"❌ Failed to wait for SOC_id to be entered: {str(e)}")
             self.inject_error_message(f"❌ Failed to wait for SOC_id to be entered{self.ERROR_MESSAGE_ENDING}.")
 
         # get the SOC_id from the injected input field and press the login button
         try:    
-            # [:-1] removes the last character (+)
-            self.SOC_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")[:-1]
+            self.SOC_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")
         except Exception as e:
-            logging.error(f"❌ Failed to get the SOC_id from the injected field: {e}")
+            logging.error(f"❌ Failed to get the SOC_id from the injected field: {str(e)}")
             self.inject_error_message(f"❌ Failed to get SOC_id from the injected field{self.ERROR_MESSAGE_ENDING}.")
 
         if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
@@ -621,16 +756,20 @@ class SOCBot(BaseWebBot):
                     if self.SOC_id is None:
                         raise ValueError("SOC_id cannot be None")
                 except Exception as e:
-                    logging.error(f"❌ Failed to request DB: {e}")
-                    self.inject_error_message(f"❌ Failed to request DB ({e}){self.ERROR_MESSAGE_ENDING}.")                
+                    logging.error(f"❌ Failed to request DB: {str(e)}")
+                    self.inject_error_message(f"❌ Failed to request DB ({str(e)}){self.ERROR_MESSAGE_ENDING}.")                
 
         try:
-            # press login button
-            xpath = "//button[@type='submit']"
-            self.click_button((By.XPATH, xpath))
+            # press the login button - submit the form directly via JavaScript
+            # "form?.submit();"" is same as "if (form) form.submit();""
+            self.driver.execute_script("""
+                var form = document.querySelector('form');
+                form?.submit()
+            """)
+            logging.info("✅ Form submitted successfully")
         except Exception as e:
-            logging.error(f"❌ Failed to press the button: {e}")
-            self.inject_error_message(f"❌ Failed to press the button{self.ERROR_MESSAGE_ENDING}.")
+            logging.error(f"❌ Failed to submit the form: {str(e)}")
+            self.inject_error_message(f"❌ Failed to submit the form{self.ERROR_MESSAGE_ENDING}.")
 
         self.login_failed_check()
         
@@ -690,7 +829,7 @@ class SOCBot(BaseWebBot):
                 logging.error(f"⚠️  User closed the browser window.")
                 self.safe_exit()
             except Exception as e:
-                logging.error(f"❌ Failed to wait for user input ('Confirm' button): {e}")
+                logging.error(f"❌ Failed to wait for user input ('Confirm' button): {str(e)}")
                 self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button){self.ERROR_MESSAGE_ENDING}.")
 
         self.driver.quit()    
