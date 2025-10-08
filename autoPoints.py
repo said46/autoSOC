@@ -17,6 +17,7 @@ import time
 import configparser
 import re
 import sys
+import base64
 
 from autoDB import SQLQueryDirect
 
@@ -53,7 +54,15 @@ class BaseWebBot:
         
         # Common settings
         self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
-        self.password = config.get('Settings', 'password', fallback='******')
+
+
+        # Decode password
+        encoded_password = config.get('Settings', 'password', fallback='******')
+        try:
+            self.password = base64.b64decode(encoded_password.encode()).decode()
+        except:
+            self.password = encoded_password  # Fallback to plain text              
+        
         self.base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)

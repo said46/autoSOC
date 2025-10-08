@@ -5,3 +5,4 @@ auto-py-to-exe.txt
 build/
 dist/
 __pycache__/
+test.py
