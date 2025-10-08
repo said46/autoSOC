@@ -37,7 +37,7 @@ class BaseWebBot:
     """Base class for web automation bots with common functionality"""
     
     def __init__(self, config_file='autoPoints.ini'):
-        logging_setup()
+        logging_setup() 
         self.setup_global_exception_handler()
         self.config = self.load_config(config_file)
         self.driver = self.create_driver()
