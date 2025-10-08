@@ -461,19 +461,24 @@ class SOCBot(BaseWebBot):
             self.inject_error_message(f"❌ Failed to switch the role{self.ERROR_MESSAGE_ENDING}.")
 
     def accept_SOC_to_apply(self) -> None:
+        """Accept SOC for apply and wait for status change"""
         try:
+            # Get current status before applying
+            old_status = self.check_SOC_status()
+            logging.info(f"⏳ Current SOC status: '{old_status}' - proceeding with accept for apply")
+            
             # Wait for Kendo components to initialize
             self.wait_for_kendo_dropdown("ActionsList")
             
-            # Build the value in Python and pass as a complete string
+            # Build the action value
             action_value = f'/Soc/TriggerChangeWorkflowState/{self.SOC_id}?trigger=AcceptForApply'
             
+            # Set dropdown value
             set_action_script = """
                 var dropdown = $('#ActionsList').data('kendoDropDownList');
                 dropdown.value(arguments[0]);
                 dropdown.trigger('change');
             """
-            
             self.driver.execute_script(set_action_script, action_value)
             
             # Wait for value to be set
@@ -484,16 +489,24 @@ class SOCBot(BaseWebBot):
                 )
             )
             
+            # Click apply button
             self.click_button((By.ID, 'ApplyActionButton'))
             
-            logging.info(f"✅ SOC {self.SOC_id} has been accepted for apply successfully")
+            # Wait for status to actually change
+            logging.info(f"⏳ Waiting for status to change from '{old_status}'...")
+            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
+                lambda _: self.check_SOC_status() != old_status
+            )
+            
+            new_status = self.check_SOC_status()
+            logging.info(f"✅ SOC {self.SOC_id} successfully accepted - status changed to '{new_status}'")
             
         except NoSuchWindowException:
-            logging.warning(f"⚠️  Browser windows was closed, end of script")
+            logging.warning(f"⚠️  Browser window was closed, end of script")
             self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Failed to accept the SOC {self.SOC_id} for apply: {e}")
-            self.inject_error_message(f"❌ Failed to accept the SOC {self.SOC_id} for apply{self.ERROR_MESSAGE_ENDING}.")
+            logging.error(f"❌ Failed to accept SOC {self.SOC_id} for apply: {e}")
+            self.inject_error_message(f"❌ Failed to accept SOC {self.SOC_id} for apply{self.ERROR_MESSAGE_ENDING}.")
 
     def update_points(self):
         # Kendo API approach failed (becomes too complicated), because the Kendo dropdowns are created dynamically 
@@ -619,9 +632,7 @@ class SOCBot(BaseWebBot):
             # open SOC details web page - not sure it is necessary, as it will be opened automatically after changing the role
             self.driver.get(SOC_view_base_link + self.SOC_id)
             self.accept_SOC_to_apply()
-
-            # Wait for the status to DIFFER from the previous value
-            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(lambda _: self.check_SOC_status() != SOC_status)
+            # Waiting is inside of accept_SOC_to_apply functiion!!!            
 
         SOC_status = self.check_SOC_status()
 
