@@ -8,14 +8,10 @@ from selenium.webdriver.support.ui import Select
 import configparser
 
 import logging
-from debug_stack import debug_stack, enable_debugging, track
 
 from autoDB import SQLQueryDirect
 from base_web_bot import BaseWebBot, message_box
 from soc_input_mixin import SOCInputMixin
-
-# ENABLE DEBUGGING AT THE START
-enable_debugging()
 
 class SOCBot(BaseWebBot, SOCInputMixin):    
     """Specialized bot for SOC points automation"""
