@@ -7,3 +7,6 @@ dist/
 __pycache__/
 test.py
 web/
+debug_scenarios/
+*.xlsx
+overrides - K-3701B СО2 Gaseous Sys.xlsx

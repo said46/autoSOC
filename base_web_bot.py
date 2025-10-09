@@ -34,6 +34,9 @@ class BaseWebBot:
         self.setup_global_exception_handler()        
         self.driver = self.create_driver()
         self.default_style_addons = {'color': 'red', 'width': None, 'align': 'center'}
+        self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = 300 # default if not redefined in a child
+        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = 20   # default if not redefined in a child
+        self.ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
 
        # Force child classes to load their configuration
         self.load_configuration()        

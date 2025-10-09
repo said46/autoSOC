@@ -1,63 +1,43 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as ec
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support import expected_conditions
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import (
     NoSuchElementException, TimeoutException, ElementNotInteractableException,
     NoSuchWindowException, StaleElementReferenceException
 )
-from selenium.webdriver.chrome.options import Options
-import ctypes
 import time
 import openpyxl as xl
-import sys
 
 import logging
-from logging_setup import logging_setup
+from typing_extensions import override
 
-class autoSOC:
+from base_web_bot import BaseWebBot, message_box
+
+class autoSOC(BaseWebBot):
     def __init__(self):
-        logging_setup()
-        self.driver = None
-        self.user_name = None
-        self.password = None
-        self.time_delay = None
-        self.SOC_id = None
+        super().__init__()
         self.list_of_overrides: list[dict[str, str]] = [] # A list of dictionaries where each dictionary represents an override.
-        self.msg_title = "Что-то пошло не так, скрипт будет завершен..."
-        self.SOC_base_link = "http://eptw.sakhalinenergy.ru/SOC/EditOverrides/"
-    
-    def message_box(self, title, text, style):
-        """Display Windows message box"""
-        return ctypes.windll.user32.MessageBoxW(0, text, title, style)
-    
-    def create_driver(self) -> WebDriver:
-        options = Options()
-        options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        #options.add_argument("--headless=new")
-        options.add_argument("--log-level=3")
-        options.add_argument("--silent")
-        options.add_argument("--disable-dev-shm-usage")        
-        return webdriver.Chrome(options=options)
-    
-    def initialize_driver(self):
-        """Initialize Chrome WebDriver"""
+        self.base_link = r"http://eptw-training.sakhalinenergy.ru"
+        self.SOC_base_link = self.base_link + r"/SOC/EditOverrides/"
+        self.EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"    
+
+    @override
+    def load_configuration(self) -> None:
+        """Load configuration - overrides parent method"""
         try:
-            self.driver = self.create_driver()
-            self.driver.maximize_window()
-            logging.info("✅ WebDriver initialized successfully")
+            self.load_config_from_excel()
+            # Verify the configuration was loaded
+            if not hasattr(self, 'list_of_overrides') or not self.list_of_overrides:
+                raise Exception("Configuration loaded but list_of_overrides is empty")
+            logging.info(f"✅ Configuration verified: {len(self.list_of_overrides)} overrides ready")
         except Exception as e:
-            logging.error(f"❌ Error initializing WebDriver: {e}")
+            logging.error(f"❌ Failed to load configuration: {e}")
             raise
 
     def load_config_from_excel(self):
         """Load configuration from Excel file"""
         try:
+            logging.info("📂 Loading Excel configuration...")
             wb = xl.load_workbook('overrides.xlsx')
             
             # Load settings
@@ -65,16 +45,22 @@ class autoSOC:
             self.user_name = sheet.cell(1, 2).value
             self.password = sheet.cell(2, 2).value
             self.time_delay = float(sheet.cell(4, 2).value)
+            logging.info(f"⚙️ Settings loaded - User: {self.user_name}, Delay: {self.time_delay}")
             
             # Load overrides
             sheet = wb['overrides']
             self.list_of_overrides = []
             
+            logging.info(f"📊 Excel sheet 'overrides' has {sheet.max_row} rows")
+            
             for row in range(2, sheet.max_row + 1):
-                if sheet.cell(row, 1).value in (None, ""):
+                tag_number = sheet.cell(row, 1).value
+                if tag_number in (None, ""):
+                    logging.info(f"🛑 Empty tag number at row {row}, stopping override loading")
                     break
+                    
                 xlsx_override = {
-                    "TagNumber": sheet.cell(row, 1).value,
+                    "TagNumber": tag_number,
                     "Description": sheet.cell(row, 2).value,
                     "OverrideType": sheet.cell(row, 4).value,
                     "OverrideMethod": sheet.cell(row, 5).value,
@@ -85,15 +71,23 @@ class autoSOC:
                     "AdditionalValueRemovedState": sheet.cell(row, 9).value
                 }
                 self.list_of_overrides.append(xlsx_override)
+                logging.info(f"📝 Loaded override {len(self.list_of_overrides)}: {tag_number}")
             
             # Load SOC ID
             self.SOC_id = str(sheet.cell(1, 12).value)
+            logging.info(f"🔢 SOC ID: {self.SOC_id}")
             
-            logging.info("✅ Configuration loaded successfully from Excel")
+            logging.info(f"✅ Configuration loaded successfully from Excel, {len(self.list_of_overrides)} overrides to add")
             
+            # Debug: Print first override to verify structure
+            if self.list_of_overrides:
+                logging.info(f"🔍 First override sample: {self.list_of_overrides[0]}")
+            else:
+                logging.warning("⚠️ No overrides were loaded from Excel file!")
+                
         except Exception as e:
             logging.error(f"❌ Error loading configuration from Excel: {e}")
-            self.message_box("Error", f"❌ Failed to load configuration from Excel", 0)
+            self.inject_error_message("❌ Failed to load configuration from Excel")
             raise
       
     def is_menu_item_already_selected(self, parent_id, menu_item_text):
@@ -125,38 +119,33 @@ class autoSOC:
             
         except NoSuchElementException:
             logging.info(f"select_menu_item: NoSuchElementException, XPATH = '{item_xpath}'")
-            self.message_box(self.msg_title, 'NoSuchElementException: ' + item_xpath, 0)
-            self.quit()
+            self.inject_error_message('NoSuchElementException: ' + item_xpath)
+            self.safe_exit()
         except TimeoutException as e:
             exception_name = type(e).__name__
             logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
-            self.message_box(self.msg_title, f"{exception_name}: {item_xpath}", 0)
-            self.quit()
+            self.inject_error_message('TimeoutException: ' + item_xpath)
+            self.safe_exit()
         except ElementNotInteractableException as e:
             exception_name = type(e).__name__
             logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
-            self.message_box(self.msg_title, f"{exception_name}: {item_xpath}", 0)
-            self.quit()
-        except NoSuchWindowException as e:
-            exception_name = type(e).__name__
-            logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
-            self.quit()
+            self.inject_error_message(f"{exception_name}: {item_xpath}")
+            self.safe_exit()
         except StaleElementReferenceException as e:
             exception_name = type(e).__name__
             logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
-            self.message_box(
-                self.msg_title, 
+            self.inject_error_message(                
                 f"Исключение {exception_name}, можно нажать Confirm, чтобы сохранить те точки, "
                 "которые уже добавлены, и запустить скрипт снова (предвариельно удалив уже "
-                "добавленные точки из overrides.xslx)", 0
+                "добавленные точки из overrides.xslx)"
             )
-            self.quit()
+            self.safe_exit()
     
     def login(self):
         """Perform login to the application"""
         try:
-            self.driver.get('http://eptw.sakhalinenergy.ru/')
-            self.switch_lang_if_not_eng()
+            self.driver.maximize_window()
+            self.driver.get(self.base_link)
             
             self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
             self.driver.find_element(By.ID, "Password").send_keys(self.password)
@@ -180,19 +169,18 @@ class autoSOC:
             # Check if SOC is locked
             try:
                 li_locked = self.driver.find_element(By.XPATH, "//li[contains(text(), 'Locked')]")
-                self.message_box('❌ SOC is locked, the script will be terminated', li_locked.text, 0)
-                self.quit()
+                self.inject_error_message('❌ SOC is locked, the script will be terminated ' + li_locked.text)
+                self.safe_exit()
             except NoSuchElementException:
                 logging.info("✅ Success: SOC is not locked")
             
             # Check for Access Denied
             try:
                 access_denied = self.driver.find_element(By.XPATH, "//h1[text()='Access Denied']")
-                self.message_box(
-                    access_denied.text, 
-                    f'Access denied, probably SOC {self.SOC_id} is archived or in improper state', 0
-                )
-                self.quit()
+                self.inject_error_message(
+                    access_denied.text +  
+                    f'Access denied, probably SOC {self.SOC_id} is archived or in improper state')
+                self.safe_exit()
             except NoSuchElementException:
                 logging.info("✅ Success: no access denied issue")
                 
@@ -236,7 +224,7 @@ class autoSOC:
                 except ElementNotInteractableException as e:
                     exception_name = type(e).__name__
                     logging.info(f"send_keys() for element with ID 'AdditionalValueAppliedState': {exception_name}")
-                    self.quit()
+                    self.safe_exit()
             
             # Select Removed State if provided and not already selected
             if override["RemovedState"] is not None:
@@ -262,43 +250,106 @@ class autoSOC:
     
     def process_all_overrides(self):
         """Process all overrides from the Excel file"""
+        logging.info(f"📋 Starting to process {len(self.list_of_overrides)} overrides")
         try:
             for i, override in enumerate(self.list_of_overrides, 1):
-                logging.info(f"Processing override {i}/{len(self.list_of_overrides)}: {override['TagNumber']}")
+                logging.info(f"🔄 Processing override {i}/{len(self.list_of_overrides)}: {override['TagNumber']}")           
+                # Debug: log override details
+                logging.debug(f"Override details: {override}")
                 self.add_override(override)
-            
+                logging.info(f"✅ Successfully processed override {i}: {override['TagNumber']}")
+
             logging.info("✅ All overrides processed successfully")
             
         except Exception as e:
             logging.error(f"❌ Error processing overrides: {e}")
             raise
+
+        self.wait_for_user_confirmation()
+    
+    def wait_for_user_confirmation(self):
+        """Wait for user to press confirm button"""
+        msg = '⚠️  Скрипт ожидает нажатия кнопки "Подтвердить".'
+        xpath = "//div[@id='bottomWindowButtons']/div"
+        self.inject_info_message(msg, (By.XPATH, xpath), {'color': 'lawngreen'})
+        try:
+            # after injecting the text, the script waits for MAX_WAIT_USER_INPUT_DELAY_SECONDS minutes for the web page title to be changed
+            # to "СНД - Домашняя страница", to ensure the user pressed the confirm button
+            WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(EC.title_is(self.EXPECTED_HOME_PAGE_TITLE))
+            logging.info("🏁  Confirm pressed, home page loaded")
+        except NoSuchWindowException as e:
+            logging.error(f"⚠️  User closed the browser window.")
+            self.safe_exit()
+        except Exception as e:
+            logging.error(f"❌ Failed to wait for user input ('Confirm' button): {str(e)}")
+            self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button){self.ERROR_MESSAGE_ENDING}.")
     
     def run(self):
         """Main method to run the automation"""
         try:
             logging.info("🚀 Starting autoSOC automation")
             
-            self.load_config_from_excel()
-            self.initialize_driver()
             self.login()
+            self.validate_configuration() 
             self.navigate_to_edit_overrides()
+            
+            if not self.verify_edit_overrides_page_loaded():
+                raise Exception("Edit Overrides page not ready")
+
             self.process_all_overrides()
-            
-            self.message_box('WARNING!!!', "Don't press OK UNTIL you press Confirm button!", 0)
-            logging.info("✅ autoSOC automation completed successfully")
-            
+                       
+            logging.info("✅ autoSOC automation completed successfully")            
         except Exception as e:
             logging.error(f"❌ autoSOC automation failed: {e}")
-            self.message_box("Error", f"Automation failed: {e}", 0)
-        finally:
-            self.quit()
-    
-    def quit(self):
-        """Cleanup and quit the driver"""
-        if self.driver:
-            self.driver.quit()
-            logging.info("✅ WebDriver closed")
+            self.inject_error_message("Error " + f"Automation failed: {e}")
+        self.driver.quit()
 
+    def debug_instance_state(self):
+        """Debug method to check instance variables"""
+        logging.info("=== DEBUG INSTANCE STATE ===")
+        logging.info(f"list_of_overrides exists: {hasattr(self, 'list_of_overrides')}")
+        if hasattr(self, 'list_of_overrides'):
+            logging.info(f"list_of_overrides type: {type(self.list_of_overrides)}")
+            logging.info(f"list_of_overrides length: {len(self.list_of_overrides)}")
+            logging.info(f"list_of_overrides id: {id(self.list_of_overrides)}")
+        logging.info(f"user_name: {getattr(self, 'user_name', 'NOT SET')}")
+        logging.info(f"SOC_id: {getattr(self, 'SOC_id', 'NOT SET')}")
+        logging.info("============================")        
+
+    def validate_configuration(self):
+        """Validate that configuration was loaded correctly"""
+        if not hasattr(self, 'list_of_overrides') or not self.list_of_overrides:
+            raise Exception("No overrides loaded from Excel file")
+        
+        if not self.user_name or not self.password:
+            raise Exception("Username or password not loaded from Excel file")
+        
+        if not self.SOC_id or self.SOC_id == "None":
+            raise Exception("SOC ID not loaded from Excel file")
+        
+        logging.info(f"✅ Configuration validated: {len(self.list_of_overrides)} overrides, SOC: {self.SOC_id}")        
+
+    def verify_edit_overrides_page_loaded(self):
+        """Verify that the Edit Overrides page is properly loaded"""
+        try:
+            # Check for essential elements
+            required_elements = [
+                "TagNumber",
+                "Description", 
+                "AddOverrideBtn"
+            ]
+            
+            for element_id in required_elements:
+                element = self.driver.find_element(By.ID, element_id)
+                if not element.is_displayed():
+                    raise Exception(f"Required element {element_id} is not visible")
+            
+            logging.info("✅ Edit Overrides page verified and ready")
+            return True
+            
+        except Exception as e:
+            logging.error(f"❌ Edit Overrides page not properly loaded: {e}")
+            return False        
 
 # Main execution
 if __name__ == "__main__":

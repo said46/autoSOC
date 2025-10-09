@@ -19,8 +19,7 @@ from base_web_bot import BaseWebBot, message_box
 class SOCBot(BaseWebBot):    
     """Specialized bot for SOC points automation"""
     FINAL_STATE_DROPDOWN_INDEX = 1
-    EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"
-    ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."    
+    EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"    
     
     # callable class
     class WaitForSOCInput:
@@ -526,9 +525,18 @@ class SOCBot(BaseWebBot):
             logging.error(f"❌ Failed to wait for SOC_id to be entered: {str(e)}")
             self.inject_error_message(f"❌ Failed to wait for SOC_id to be entered{self.ERROR_MESSAGE_ENDING}.")
 
-        # get the SOC_id from the injected input field and press the submit the form
-        try:    
-            self.SOC_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")
+
+        try:
+            # get the SOC_id from the injected input field and press the submit the form
+            raw_soc_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")
+            
+            # Strip leading zero if SOC ID is 8 digits and starts with 0
+            if len(raw_soc_id) == 8 and raw_soc_id.startswith('0'):
+                self.SOC_id = raw_soc_id[1:]  # Remove the first character
+                logging.info(f"🔧 Stripped leading zero: '{raw_soc_id}' -> '{self.SOC_id}'")
+            else:
+                self.SOC_id = raw_soc_id
+
         except Exception as e:
             logging.error(f"❌ Failed to get the SOC_id from the injected field: {str(e)}")
             self.inject_error_message(f"❌ Failed to get SOC_id from the injected field{self.ERROR_MESSAGE_ENDING}.")
@@ -562,20 +570,26 @@ class SOCBot(BaseWebBot):
         """Navigate to SOC details page and check/update status if needed"""
         # open SOC details web page
         SOC_view_base_link = self.base_link + r"Soc/Details/"
-        self.driver.get(SOC_view_base_link + self.SOC_id) # http://eptw-traning.sakhalinenergy.ru/Soc/Details/1054470
-
+        self.driver.get(SOC_view_base_link + self.SOC_id)
+        
         self.SOC_details_opened_check()
         SOC_status = self.get_SOC_status()
+        logging.info(f"🔍 Initial SOC status: '{SOC_status}'")
 
         # if SOC_status == "approved for apply", there is a need to change the role to OAC and accept the SOC for apply
         if SOC_status == self.SOC_status_approved_for_apply:
+            logging.info("🔄 SOC needs to be accepted for apply - switching role to OAC")
+            
             # switch the role to OAC
             self.switch_role('OAC')
+                       
             # open SOC details web page - not sure it is necessary, as it will be opened automatically after changing the role
             self.driver.get(SOC_view_base_link + self.SOC_id)
+                       
             self.accept_SOC_to_apply()
-            # Waiting is inside of accept_SOC_to_apply functiion!!! 
+            # Waiting is inside of accept_SOC_to_apply function!!! 
             SOC_status = self.get_SOC_status()
+            logging.info(f"🔍 SOC status after accept attempt: '{SOC_status}'")
 
         if SOC_status not in self.good_statuses:
             logging.error(f'❌ SOC {self.SOC_id} status is "{SOC_status}", the script cannot proceed.')
@@ -623,6 +637,64 @@ class SOCBot(BaseWebBot):
         except Exception as e:
             logging.error(f"❌ Failed to wait for user input ('Confirm' button): {str(e)}")
             self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button){self.ERROR_MESSAGE_ENDING}.")
+
+    def accept_SOC_to_apply(self) -> None:
+        """Accept SOC for apply and wait for status change"""
+        try:
+            old_status = self.get_SOC_status()
+            logging.info(f"⏳ Current SOC status: '{old_status}' - proceeding with accept for apply")
+                        
+            # Wait for Kendo components to initialize
+            self.wait_for_kendo_dropdown("ActionsList")
+                        
+            # Build the action value
+            action_value = f'/Soc/TriggerChangeWorkflowState/{self.SOC_id}?trigger=AcceptForApply'
+                       
+            # Set dropdown value
+            set_action_script = """
+                var dropdown = $('#ActionsList').data('kendoDropDownList');
+                console.log('Dropdown object:', dropdown);
+                console.log('Current value:', dropdown.value());
+                dropdown.value(arguments[0]);
+                dropdown.trigger('change');
+                return {
+                    success: true,
+                    newValue: dropdown.value(),
+                    text: dropdown.text()
+                };
+            """
+            result = self.driver.execute_script(set_action_script, action_value)
+            logging.info(f"✅ Action value set result: {result}")
+            
+            # Wait for value to be set with timeout handling
+            WebDriverWait(self.driver, 10).until(
+                lambda _: self.driver.execute_script(
+                    "return $('#ActionsList').data('kendoDropDownList').value() === arguments[0];",
+                    action_value
+                )
+            )
+                        
+            # Click apply button
+            self.click_button((By.ID, 'ApplyActionButton'))
+                       
+            # Wait for status to actually change with better error handling
+            logging.info(f"⏳ Waiting for status to change from '{old_status}'...")
+            try:
+                WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
+                    lambda driver: self.get_SOC_status() != old_status
+                )
+                new_status = self.get_SOC_status()
+                logging.info(f"✅ SOC {self.SOC_id} successfully accepted - status changed to '{new_status}'")                                
+            except Exception as timeout_error:
+                logging.error(f"❌ Status did not change from '{old_status}' within timeout")
+                raise timeout_error
+                
+        except NoSuchWindowException:
+            logging.warning(f"🏁  Browser window was closed, end of script")
+            self.safe_exit()
+        except Exception as e:
+            logging.error(f"❌ Failed to accept SOC {self.SOC_id} for apply: {str(e)}")
+            self.inject_error_message(f"❌ Failed to accept SOC {self.SOC_id} for apply{self.ERROR_MESSAGE_ENDING}.")
 
     def run_automation(self):
         """Main automation workflow"""
