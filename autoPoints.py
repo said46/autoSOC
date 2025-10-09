@@ -9,7 +9,7 @@ from selenium.webdriver.support.ui import Select
 import configparser
 import re
 import base64
-from typing_extensions import override
+from typing_extensions import override, Optional
 
 import logging
 
@@ -20,7 +20,7 @@ class SOCBot(BaseWebBot):
     """Specialized bot for SOC points automation"""
     FINAL_STATE_DROPDOWN_INDEX = 1
     EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"
-    ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
+    ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."    
     
     # callable class
     class WaitForSOCInput:
@@ -98,6 +98,8 @@ class SOCBot(BaseWebBot):
         # Load ALL configuration including base settings
         self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
         self.password = self.process_password(config.get('Settings', 'password', fallback='******'))
+        if '\n' in self.password:
+            self.password = 'INCORRECT PASSWORD'
         self.base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)        
@@ -477,7 +479,8 @@ class SOCBot(BaseWebBot):
         
         return SOC_id
 
-    def run_automation(self):
+    def initialize_and_login(self):
+        """Initialize browser and perform login with SOC input"""
         try:
             self.driver.maximize_window()
             self.driver.get(self.base_link)
@@ -488,7 +491,11 @@ class SOCBot(BaseWebBot):
         # login
         try:
             self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
-            self.driver.find_element(By.ID, "Password").send_keys(self.password)
+            if self.password != "INCORRECT PASSWORD":
+                self.driver.find_element(By.ID, "Password").send_keys(self.password)
+            else:
+                logging.error("❌ Password contains line break, cannot continue")
+                self.inject_error_message(f"❌ Password contains line break{self.ERROR_MESSAGE_ENDING}.")
         except NoSuchElementException as e:
             logging.error(f"❌ Failed to find 'Username' or 'Password' input fields: {str(e)}")
             self.inject_error_message(f"❌ Failed to find 'Username' or 'Password' input fields {self.ERROR_MESSAGE_ENDING}.")
@@ -498,6 +505,8 @@ class SOCBot(BaseWebBot):
 
         self.inject_SOC_id_input()
 
+    def wait_for_soc_input_and_submit(self):
+        """Wait for SOC ID input and submit the form"""
         try:
             # the script will wait for MAX_WAIT_USER_INPUT_DELAY_SECONDS until ****
             WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
@@ -517,7 +526,7 @@ class SOCBot(BaseWebBot):
             logging.error(f"❌ Failed to wait for SOC_id to be entered: {str(e)}")
             self.inject_error_message(f"❌ Failed to wait for SOC_id to be entered{self.ERROR_MESSAGE_ENDING}.")
 
-        # get the SOC_id from the injected input field and press the login button
+        # get the SOC_id from the injected input field and press the submit the form
         try:    
             self.SOC_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")
         except Exception as e:
@@ -548,7 +557,9 @@ class SOCBot(BaseWebBot):
             self.inject_error_message(f"❌ Failed to submit the form{self.ERROR_MESSAGE_ENDING}.")
 
         self.login_failed_check()
-        
+
+    def navigate_to_soc_and_check_status(self):
+        """Navigate to SOC details page and check/update status if needed"""
         # open SOC details web page
         SOC_view_base_link = self.base_link + r"Soc/Details/"
         self.driver.get(SOC_view_base_link + self.SOC_id) # http://eptw-traning.sakhalinenergy.ru/Soc/Details/1054470
@@ -572,6 +583,8 @@ class SOCBot(BaseWebBot):
             self.inject_error_message(f'❌ SOC {self.SOC_id} status is "{SOC_status}"{self.ERROR_MESSAGE_ENDING}.', 
                                         locator, style_addons={'width': '100%', 'align': 'center'})
 
+    def process_soc_roles(self):
+        """Process SOC for each required role"""
         # for each role (usually OAC, OAV, depends on the values in the ini-file)
         for SOC_role in self.SOC_roles:
             # change the role
@@ -592,22 +605,32 @@ class SOCBot(BaseWebBot):
             # update all points
             self.update_points()
             
-            msg = '⚠️  Скрипт ожидает нажатия кнопки "Подтвердить".'
-            xpath = "//div[@id='bottomWindowButtons']/div"
-            self.inject_info_message(msg, (By.XPATH, xpath), {'color': 'lawngreen'})
-            try:
-                # after injecting the text, the script waits for MAX_WAIT_USER_INPUT_DELAY_SECONDS minutes for the web page title to be changed
-                # to "СНД - Домашняя страница", to ensure the user pressed the confirm button
-                WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(EC.title_is(self.EXPECTED_HOME_PAGE_TITLE))
-                logging.info("🏁  Confirm pressed, home page loaded")
-            except NoSuchWindowException as e:
-                logging.error(f"⚠️  User closed the browser window.")
-                self.safe_exit()
-            except Exception as e:
-                logging.error(f"❌ Failed to wait for user input ('Confirm' button): {str(e)}")
-                self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button){self.ERROR_MESSAGE_ENDING}.")
+            self.wait_for_user_confirmation()
 
-        self.driver.quit()    
+    def wait_for_user_confirmation(self):
+        """Wait for user to press confirm button"""
+        msg = '⚠️  Скрипт ожидает нажатия кнопки "Подтвердить".'
+        xpath = "//div[@id='bottomWindowButtons']/div"
+        self.inject_info_message(msg, (By.XPATH, xpath), {'color': 'lawngreen'})
+        try:
+            # after injecting the text, the script waits for MAX_WAIT_USER_INPUT_DELAY_SECONDS minutes for the web page title to be changed
+            # to "СНД - Домашняя страница", to ensure the user pressed the confirm button
+            WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(EC.title_is(self.EXPECTED_HOME_PAGE_TITLE))
+            logging.info("🏁  Confirm pressed, home page loaded")
+        except NoSuchWindowException as e:
+            logging.error(f"⚠️  User closed the browser window.")
+            self.safe_exit()
+        except Exception as e:
+            logging.error(f"❌ Failed to wait for user input ('Confirm' button): {str(e)}")
+            self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button){self.ERROR_MESSAGE_ENDING}.")
+
+    def run_automation(self):
+        """Main automation workflow"""
+        self.initialize_and_login()
+        self.wait_for_soc_input_and_submit()
+        self.navigate_to_soc_and_check_status()
+        self.process_soc_roles()
+        self.driver.quit()
 
 if __name__ == "__main__":        
     bot = SOCBot()
