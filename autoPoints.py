@@ -1,7 +1,5 @@
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
-from selenium.common.exceptions import NoSuchWindowException
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import (NoSuchElementException, WebDriverException, NoSuchWindowException)
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
@@ -9,7 +7,6 @@ from selenium.webdriver.support.ui import Select
 import configparser
 import re
 import base64
-from typing_extensions import override, Optional
 
 import logging
 
@@ -70,11 +67,15 @@ class SOCBot(BaseWebBot):
     def __init__(self):
         super().__init__()
         self.warning_message: str | None = None
+        self.load_configuration()
+
+    @property
+    def base_link(self) -> str:
+        return self._base_link
     
     def process_password(self, password: str) -> str:
         # Decode password
         encoded_password = password
-
         try:
             logging.info(f"🔐 Password decoded successfully")
             return base64.b64decode(password.encode()).decode()
@@ -82,15 +83,8 @@ class SOCBot(BaseWebBot):
             logging.error(f"🔐 Failed to decode password: {str(e)}, using plain text password")
             return encoded_password  # Fallback to plain text
     
-    @override
-    def load_configuration(self) -> None:
-        """SOCBot-specific configuration loading - REQUIRED by base class"""
+    def load_configuration(self) -> None:        
         self.config_file = 'autoPoints.ini'
-        self.warning_message: Optional[str] = None
-        self.load_soc_specific_config()
-
-    def load_soc_specific_config(self):
-        """Load SOC-specific configuration"""
         config = configparser.ConfigParser(interpolation=None)
         config.read(self.config_file, encoding="utf8")
 
@@ -99,7 +93,7 @@ class SOCBot(BaseWebBot):
         self.password = self.process_password(config.get('Settings', 'password', fallback='******'))
         if '\n' in self.password:
             self.password = 'INCORRECT PASSWORD'
-        self.base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
+        self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)        
         self.SOC_id = config.get('Settings', 'SOC_id', fallback='')
@@ -143,8 +137,7 @@ class SOCBot(BaseWebBot):
             self.SOC_ID_PATTERN = r"^\d{4,8}$"
         else:
             self.SOC_ID_PATTERN = r"^\d{7,8}$"
-    
-    # SOC-specific methods that now use base class error handling
+        
     def get_SOC_status(self) -> str:    
         script = """
             return document.evaluate(
@@ -315,7 +308,7 @@ class SOCBot(BaseWebBot):
             logging.error("❌ Login issue, check the password in ini-file.")
             self.inject_error_message("❌ Login issue, check the password in ini-file, the script cannot proceed, close this window")
         except NoSuchElementException:
-            logging.info("✅ Success: no login issue")                
+            logging.info("✅ Success: no login issue")
     
     def get_current_role(self) -> str:
         """Get the current role from the page using the role span element"""
@@ -479,13 +472,7 @@ class SOCBot(BaseWebBot):
         return SOC_id
 
     def initialize_and_login(self):
-        """Initialize browser and perform login with SOC input"""
-        try:
-            self.driver.maximize_window()
-            self.driver.get(self.base_link)
-        except WebDriverException as e:
-            logging.error(f"❌ Failed to load {self.base_link} - {e.__class__.__name__}")
-            self.inject_error_message(f"❌ Cannot access {self.base_link}. Check network connection.")
+        self.navigate_to_base()
 
         # login
         try:
@@ -704,6 +691,6 @@ class SOCBot(BaseWebBot):
         self.process_soc_roles()
         self.driver.quit()
 
-if __name__ == "__main__":        
+if __name__ == "__main__":
     bot = SOCBot()
     bot.run_automation()

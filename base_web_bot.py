@@ -4,8 +4,10 @@ from selenium.webdriver.common.by import By
 import ctypes
 from typing import Union, TypedDict
 from abc import abstractmethod
+from typing import final
 
 from selenium.common.exceptions import NoSuchWindowException
+from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
@@ -37,18 +39,7 @@ class BaseWebBot:
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = 300 # default if not redefined in a child
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = 20   # default if not redefined in a child
         self.ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
-
-       # Force child classes to load their configuration
-        self.load_configuration()        
-    
-    @abstractmethod
-    def load_configuration(self) -> None:
-        """
-        Abstract method that child classes MUST implement to load their specific configuration.
-        This ensures all bots properly handle their configuration setup.
-        """
-        pass    
-    
+           
     def create_driver(self) -> WebDriver:
         """Create and configure WebDriver instance"""
         options = Options()
@@ -57,6 +48,22 @@ class BaseWebBot:
         options.add_argument("--silent")
         options.add_argument("--disable-dev-shm-usage")
         return webdriver.Chrome(options=options)
+    
+    @property
+    @abstractmethod
+    def base_link(self) -> str:
+        """Child classes MUST define this property"""
+        pass     
+    
+    def navigate_to_base(self) -> None:
+        """Final method that uses the abstract base_link property"""
+        try:
+            self.driver.maximize_window()
+            self.driver.get(self.base_link)  # Uses the abstract property
+        except WebDriverException as e:
+            logging.error(f"❌ Failed to load {self.base_link} - {e.__class__.__name__}")
+            self.inject_error_message(f"❌ Cannot access {self.base_link}. Check network connection.")    
+    
     
     def safe_exit(self) -> None:
         """Clean up resources and exit safely"""

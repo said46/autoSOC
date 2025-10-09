@@ -16,23 +16,14 @@ from base_web_bot import BaseWebBot, message_box
 class autoSOC(BaseWebBot):
     def __init__(self):
         super().__init__()
-        self.base_link = r"http://eptw-training.sakhalinenergy.ru"
+        self._base_link = r"http://eptw-training.sakhalinenergy.ru" # change to read from Excel
         self.SOC_base_link = self.base_link + r"/SOC/EditOverrides/"
         self.EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"    
 
-    @override
-    def load_configuration(self) -> None:
-        """Load configuration - overrides parent method"""
-        try:
-            self.load_config_from_excel()
-            # Verify the configuration was loaded
-            if not hasattr(self, 'list_of_overrides') or not self.list_of_overrides:
-                raise Exception("Configuration loaded but list_of_overrides is empty")
-            logging.info(f"✅ Configuration verified: {len(self.list_of_overrides)} overrides ready")
-        except Exception as e:
-            logging.error(f"❌ Failed to load configuration: {e}")
-            raise
-
+    @property
+    def base_link(self) -> str:
+        return self._base_link
+    
     def load_config_from_excel(self):
         """Load configuration from Excel file"""
         try:
@@ -73,21 +64,32 @@ class autoSOC(BaseWebBot):
             
             # Load SOC ID
             self.SOC_id = str(sheet.cell(1, 12).value)
-            logging.info(f"🔢 SOC ID: {self.SOC_id}")
-            
-            logging.info(f"✅ Configuration loaded successfully from Excel, {len(self.list_of_overrides)} overrides to add")
-            
-            # Debug: Print first override to verify structure
-            if self.list_of_overrides:
-                logging.info(f"🔍 First override sample: {self.list_of_overrides[0]}")
-            else:
-                logging.warning("⚠️ No overrides were loaded from Excel file!")
-                
+            logging.info(f"✅ Configuration loaded successfully from Excel, {len(self.list_of_overrides)} overrides to add")                            
         except Exception as e:
-            logging.error(f"❌ Error loading configuration from Excel: {e}")
+            logging.error(f"❌ Failed to load configuration from Excel: {e}")
             self.inject_error_message("❌ Failed to load configuration from Excel")
             raise
       
+    # REWORK WITH KENDO API, IT IS GREAT!
+    # https://chat.deepseek.com/share/39sn850eqwc61kiswu
+    # https://chat.deepseek.com/share/h1hszpavbt3pw7pyqk    
+    # def get_kendo_selected_item(self, element_id: str) -> dict:
+    #     """Get currently selected item from Kendo dropdown"""
+    #     script = """
+    #     var dropdown = $('#%s').data('kendoDropDownList');
+    #     if (dropdown) {
+    #         var selected = dropdown.dataItem();
+    #         return selected ? JSON.stringify(selected) : null;
+    #     }
+    #     return null;
+    #     """ % element_id
+        
+    #     try:
+    #         result = self.driver.execute_script(script)
+    #         return json.loads(result) if result else {}
+    #     except Exception as e:
+    #         logging.error(f"❌ Failed to get selected item: {e}")
+    #         return {}    
     def is_menu_item_already_selected(self, parent_id, menu_item_text):
         """Check if menu item is already selected"""
         item_xpath = (
@@ -96,10 +98,36 @@ class autoSOC(BaseWebBot):
         )
         try:
             self.driver.find_element(By.XPATH, item_xpath)
-            logging.info(f"is_menu_item_already_selected: item_xpath for '{menu_item_text}', '{parent_id}' is: '{item_xpath}'")
             return True
         except NoSuchElementException:
             return False
+    
+    # REWORK WITH KENDO API, IT IS GREAT!
+    # https://chat.deepseek.com/share/39sn850eqwc61kiswu
+    # https://chat.deepseek.com/share/h1hszpavbt3pw7pyqk
+    # def get_kendo_dropdown_data(self, element_id: str) -> list[dict]:
+    #     """Get Kendo DropDownList data as list of dictionaries"""
+    #     script = """
+    #         var dropdown = $('#%s').data('kendoDropDownList');
+    #         if (dropdown) {
+    #             var data = dropdown.dataItems();
+    #             return JSON.stringify(data);
+    #         }
+    #         return null;
+    #     """ % element_id
+
+    #     try:
+    #         result = self.driver.execute_script(script)
+    #         if result:
+    #             return json.loads(result)
+    #         return []
+    #     except Exception as e:
+    #         logging.error(f"❌ Failed to get Kendo dropdown data: {e}")
+    #         return []
+    # # Usage:
+    # dropdown_data = self.get_kendo_dropdown_data("ActionsList")
+    # print(dropdown_data)
+    # # Output: [{'Text': 'Action 1', 'Value': '/action1'}, {'Text': 'Action 2', 'Value': '/action2'}]
     
     def select_menu_item(self, parent_id, menu_item_text):
         """Select an item from a menu"""
@@ -116,22 +144,22 @@ class autoSOC(BaseWebBot):
             self.driver.execute_script("arguments[0].click();", element)
             
         except NoSuchElementException:
-            logging.info(f"select_menu_item: NoSuchElementException, XPATH = '{item_xpath}'")
+            logging.info(f"NoSuchElementException, XPATH = '{item_xpath}'")
             self.inject_error_message('NoSuchElementException: ' + item_xpath)
             self.safe_exit()
         except TimeoutException as e:
             exception_name = type(e).__name__
-            logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
-            self.inject_error_message('TimeoutException: ' + item_xpath)
+            logging.info(f"{exception_name}, XPATH = '{item_xpath}'")
+            self.inject_error_message(f"{exception_name}, XPATH = '{item_xpath}'")
             self.safe_exit()
         except ElementNotInteractableException as e:
             exception_name = type(e).__name__
-            logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
+            logging.info(f"{exception_name}, XPATH = '{item_xpath}'")
             self.inject_error_message(f"{exception_name}: {item_xpath}")
             self.safe_exit()
         except StaleElementReferenceException as e:
             exception_name = type(e).__name__
-            logging.info(f"select_menu_item: {exception_name}, XPATH = '{item_xpath}'")
+            logging.info(f"{exception_name}, XPATH = '{item_xpath}'")
             self.inject_error_message(                
                 f"Исключение {exception_name}, можно нажать Confirm, чтобы сохранить те точки, "
                 "которые уже добавлены, и запустить скрипт снова (предвариельно удалив уже "
@@ -142,46 +170,51 @@ class autoSOC(BaseWebBot):
     def login(self):
         """Perform login to the application"""
         try:
-            self.driver.maximize_window()
-            self.driver.get(self.base_link)
-            
+            self.navigate_to_base()            
             self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
-            self.driver.find_element(By.ID, "Password").send_keys(self.password)
-            self.driver.find_element(
-                By.XPATH, 
-                "//button[@type='submit' and @class='panel-line-btn btn-sm k-button k-primary']"
-            ).click()
+            self.driver.find_element(By.ID, "Password").send_keys(self.password)            
+            button_locator = (By.XPATH, "//button[@type='submit' and @class='panel-line-btn btn-sm k-button k-primary']")            
+            self.click_button(button_locator) # correct XPATH with contains(@class)!!!
             
+            self.login_failed_check()
             logging.info("✅ Login completed successfully")
             
         except Exception as e:
             logging.error(f"❌ Error during login: {e}")
             raise
     
+    def SOC_locked_check(self) -> None:
+        try:
+            li_locked = self.driver.find_element(By.XPATH, "//li[contains(text(), 'Locked')]")
+            logging.error(f"❌ SOC is locked, the script will be terminated: {li_locked.text}")
+            self.inject_error_message(f"❌ SOC is locked, the script cannot proceed, close this window: {li_locked.text}")
+        except NoSuchElementException:
+            logging.info("✅ Success: SOC is not locked")
+    
+    def access_denied_check(self):
+        # check for Access Denied
+        try:
+            access_denied = self.driver.find_element(By.XPATH, "//h1[contains(text(), 'Access Denied')]")
+            logging.error(f"❌ {access_denied.text} - Access denied, probably SOC {self.SOC_id} is archived or in improper state")
+            self.inject_error_message(f"❌ Access denied, probably SOC {self.SOC_id} is archived or in improper state{self.ERROR_MESSAGE_ENDING}.")
+        except NoSuchElementException:
+            logging.info("✅ Success: no access denied issue")
+
+    def login_failed_check(self):
+        # check for login issue
+        try:
+            # check if li tag with parent div[contains(@class, 'text-danger')] contains any text
+            self.driver.find_element(By.XPATH, "//div[contains(@class, 'text-danger')]//li[text()]")
+            logging.error("❌ Login issue, check the password in ini-file.")
+            self.inject_error_message("❌ Login issue, check the password in ini-file, the script cannot proceed, close this window")
+        except NoSuchElementException:
+            logging.info("✅ Success: no login issue")
+
     def navigate_to_edit_overrides(self):
         """Navigate to Edit Overrides page"""
         try:
             self.driver.get(self.SOC_base_link + self.SOC_id)
-            logging.info(f"👆 Navigated to Edit Overrides page for SOC {self.SOC_id}")
-            
-            # Check if SOC is locked
-            try:
-                li_locked = self.driver.find_element(By.XPATH, "//li[contains(text(), 'Locked')]")
-                self.inject_error_message('❌ SOC is locked, the script will be terminated ' + li_locked.text)
-                self.safe_exit()
-            except NoSuchElementException:
-                logging.info("✅ Success: SOC is not locked")
-            
-            # Check for Access Denied
-            try:
-                access_denied = self.driver.find_element(By.XPATH, "//h1[text()='Access Denied']")
-                self.inject_error_message(
-                    access_denied.text +  
-                    f'Access denied, probably SOC {self.SOC_id} is archived or in improper state')
-                self.safe_exit()
-            except NoSuchElementException:
-                logging.info("✅ Success: no access denied issue")
-                
+            logging.info(f"👆 Navigated to Edit Overrides page for SOC {self.SOC_id}")                           
         except Exception as e:
             logging.error(f"❌ Error navigating to Edit Overrides: {e}")
             raise
@@ -284,11 +317,15 @@ class autoSOC(BaseWebBot):
     
     def run(self):
         """Main method to run the automation"""
-        try:
+        try:            
+            self.load_config_from_excel()
+            
             logging.info("🚀 Starting autoSOC automation")
             
             self.login()
-            self.navigate_to_edit_overrides()            
+            self.navigate_to_edit_overrides()
+            self.SOC_locked_check()
+            self.access_denied_check()
             self.process_all_overrides()
                        
             logging.info("🏁 autoSOC automation completed successfully")
