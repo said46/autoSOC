@@ -28,7 +28,8 @@ def logging_setup():
     import __main__
     log_filename = __main__.__file__[__main__.__file__.rfind("\\")+1:-3] + ".log"
     file_handler = logging.FileHandler(log_filename, encoding='utf-8', mode='w')
-    format_string = "%(asctime)s\tline: %(lineno)d\tfunction: %(funcName)s ---> %(message)s"    
+    # format_string = "%(asctime)s\tline: %(lineno)d\tfunction: %(funcName)s ---> %(message)s"
+    format_string = "%(asctime)s\tmodule: %(module)s\tline: %(lineno)d\tfunction: %(funcName)s\tfile: %(filename)s ---> %(message)s"
     file_formatter = logging.Formatter(format_string)
     
     if sys.stdout.isatty():

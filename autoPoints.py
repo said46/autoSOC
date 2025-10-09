@@ -1,71 +1,30 @@
+# autoPoints.py
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import (NoSuchElementException, WebDriverException, NoSuchWindowException)
+from selenium.common.exceptions import (NoSuchElementException, NoSuchWindowException)
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
 
 import configparser
-import re
-import base64
 
 import logging
+from debug_stack import debug_stack, enable_debugging, track
 
 from autoDB import SQLQueryDirect
 from base_web_bot import BaseWebBot, message_box
+from soc_input_mixin import SOCInputMixin
 
-class SOCBot(BaseWebBot):    
+# ENABLE DEBUGGING AT THE START
+enable_debugging()
+
+class SOCBot(BaseWebBot, SOCInputMixin):    
     """Specialized bot for SOC points automation"""
     FINAL_STATE_DROPDOWN_INDEX = 1
     EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"    
     
-    # callable class
-    class WaitForSOCInput:
-        """SOCBot-specific wait condition for SOC input"""
-        def __init__(self, locator, soc_bot):
-            self.locator = locator
-            self.soc_bot = soc_bot
-            self.last_value = ""
-
-        def __call__(self, driver):
-            try:
-                # Browser closure check
-                if self.soc_bot._is_browser_closed():
-                    return True  # Return True to stop waiting and continue
-                    
-                injected_input = driver.find_element(*self.locator)
-                current_value = injected_input.get_attribute("value")
-                
-                if current_value != self.last_value:
-                    is_valid, message = self.soc_bot._validate_soc_input(current_value)
-                    self.soc_bot._update_input_ui(is_valid, message)
-                    self.last_value = current_value
-                
-                enter_pressed = injected_input.get_attribute('data-enter-pressed') == 'true'
-                if enter_pressed:
-                    is_valid, message = self.soc_bot._validate_soc_input(current_value)
-                    self.soc_bot._update_input_ui(is_valid, message)
-                    
-                    if is_valid:
-                        driver.execute_script("""
-                            var input = document.getElementById('InjectedInput');
-                            input.removeAttribute('data-enter-pressed');
-                            input.disabled = true;
-                        """)
-                        return True
-                    else:
-                        self.soc_bot._update_input_ui(False, "❌ Invalid - " + message.split('⚠️ ')[-1])
-                        driver.execute_script("""
-                            var input = document.getElementById('InjectedInput');
-                            input.removeAttribute('data-enter-pressed');
-                        """)
-                
-                return False
-            except (NoSuchWindowException, WebDriverException):
-                # Browser closed - return True to break the wait
-                return True
-
     def __init__(self):
-        super().__init__()
+        BaseWebBot.__init__(self)
+        SOCInputMixin.__init__(self)
         self.warning_message: str | None = None
         self.load_configuration()
 
@@ -73,46 +32,22 @@ class SOCBot(BaseWebBot):
     def base_link(self) -> str:
         return self._base_link
     
-    def process_password(self, password: str) -> str:
-        # Decode password
-        encoded_password = password
-        try:
-            logging.info(f"🔐 Password decoded successfully")
-            return base64.b64decode(password.encode()).decode()
-        except Exception as e:
-            logging.error(f"🔐 Failed to decode password: {str(e)}, using plain text password")
-            return encoded_password  # Fallback to plain text
-    
-    def load_configuration(self) -> None:        
-        self.config_file = 'autoPoints.ini'
-        config = configparser.ConfigParser(interpolation=None)
-        config.read(self.config_file, encoding="utf8")
-
-        # Load ALL configuration including base settings
-        self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
-        self.password = self.process_password(config.get('Settings', 'password', fallback='******'))
-        if '\n' in self.password:
-            self.password = 'INCORRECT PASSWORD'
-        self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
-        self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
-        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)        
-        self.SOC_id = config.get('Settings', 'SOC_id', fallback='')
-        self.SOC_roles = config.get('Roles', 'SOC_roles', fallback='OAC,OAV').split(',')
-        self.good_statuses = config.get(
-            'Statuses',
-            'good_statuses', 
-            fallback='принято для установки-запрошено для удаления-установлено, не подтверждено-удалено, не подтверждено').split('-')
-        self.SOC_status_approved_for_apply = config.get('Statuses', 'SOC_status_approved_for_apply', fallback='одобрено для установки')
-        self.roles = {config.get('Roles', 'OAC', fallback='Исполняющий форсирование'): 'OAC', 
-                      config.get('Roles', 'OAV', fallback='Проверяющий форсирование'): 'OAV'}
-                      
-        self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = config.getboolean('Database', 'CONNECT_TO_DB_FOR_PARTIAL_SOC_ID', fallback=False)
-                           
+    def _load_database_configuration(self, config: configparser.ConfigParser) -> None:
+        """
+        Load database configuration from config parser
+        
+        💡 TIP: Separating database config makes the main load_configuration method cleaner
+        💡 TIP: This method handles all database-related configuration in one place
+        """
         # Database configuration
         if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
             try:
                 self.db_server = config.get('Database', 'server')
-                self.db_password = self.process_password(config.get('Database', 'password'))
+                
+                # Use mixin's process_password method for database password
+                raw_db_password = config.get('Database', 'password')
+                self.db_password = self.process_password(raw_db_password)
+                
                 self.db_database = config.get('Database', 'database') 
                 self.db_username = config.get('Database', 'username')
                                 
@@ -132,13 +67,59 @@ class SOCBot(BaseWebBot):
                 self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = False
                 self.warning_message = "⚠️  SQL query in ini-file doesn't start with SELECT or is empty. Disabling database features."
                 logging.warning(self.warning_message)        
+    
+    def load_configuration(self) -> None:        
+        """
+        Load all configuration settings from the ini file
+        
+        💡 TIP: Using a separate method for database config keeps this method clean
+        💡 TIP: All configuration-related logic is centralized in this method
+        """
+        self.config_file = 'autoPoints.ini'
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(self.config_file, encoding="utf8")
 
+        # Load ALL configuration including base settings
+        self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
+        
+        # Use mixin's process_password method instead of local implementation
+        raw_password = config.get('Settings', 'password', fallback='******')
+        self.password = self.process_password(raw_password)
+        
+        if '\n' in self.password:
+            self.password = 'INCORRECT PASSWORD'
+        self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
+        self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
+        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)        
+        self.SOC_id = config.get('Settings', 'SOC_id', fallback='')
+        self.SOC_roles = config.get('Roles', 'SOC_roles', fallback='OAC,OAV').split(',')
+        self.good_statuses = config.get(
+            'Statuses',
+            'good_statuses', 
+            fallback='принято для установки-запрошено для удаления-установлено, не подтверждено-удалено, не подтверждено').split('-')
+        self.SOC_status_approved_for_apply = config.get('Statuses', 'SOC_status_approved_for_apply', fallback='одобрено для установки')
+        self.roles = {config.get('Roles', 'OAC', fallback='Исполняющий форсирование'): 'OAC', 
+                      config.get('Roles', 'OAV', fallback='Проверяющий форсирование'): 'OAV'}
+                      
+        self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = config.getboolean('Database', 'CONNECT_TO_DB_FOR_PARTIAL_SOC_ID', fallback=False)
+                           
+        # Load database configuration using separate method
+        self._load_database_configuration(config)
+
+        # Configure the mixin with SOC pattern
         if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
             self.SOC_ID_PATTERN = r"^\d{4,8}$"
         else:
             self.SOC_ID_PATTERN = r"^\d{7,8}$"
-        
+            
+  
     def get_SOC_status(self) -> str:    
+        """
+        Get the current status of the SOC
+        
+        💡 TIP: Uses JavaScript execution to extract status from the page
+        💡 TIP: Returns empty string if status cannot be retrieved
+        """
         script = """
             return document.evaluate(
                 "//label[normalize-space()='Состояние']/following-sibling::text()[1]",
@@ -147,7 +128,7 @@ class SOCBot(BaseWebBot):
                 XPathResult.STRING_TYPE,
                 null
             ).stringValue.trim();
-        """
+        """        
         try:
             status = self.driver.execute_script(script)
             if status == '':
@@ -159,156 +140,23 @@ class SOCBot(BaseWebBot):
             self.inject_error_message(f"❌ Failed to get SOC status: {str(e)}")
             return ''
     
-    def inject_SOC_id_input(self) -> None:
-        try:
-            # JavaScript to create the SOC id input field
-            js_code = """
-                var container = document.createElement('div');
-                container.style.cssText = 'margin-top: 10px;';
-                
-                var input = document.createElement('input');
-                input.type = 'text';
-                input.id = 'InjectedInput';
-                input.className = "form-control control-lg";
-                input.style.marginBottom = "5px";
-                input.style.width = "100%";
-                
-                // Hide the original submit button AND prevent form submission
-                var submitButton = document.querySelector('button[type="submit"]');
-                if (submitButton) submitButton.style.display = 'none';
-                
-                // Prevent form submission on Enter in any field
-                var form = document.querySelector('form');
-                if (form) {
-                    form.addEventListener('keypress', function(e) {
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            e.stopPropagation();
-                        }
-                    });
-                }
-                
-                container.appendChild(input);
-                const referenceElement = document.getElementById('Password');
-                referenceElement.insertAdjacentElement('afterend', container);
-                input.focus();
-            """
-            self.driver.execute_script(js_code)
-            
-            # Now use Python to add the guide text and set up monitoring
-            self._setup_input_monitoring()
-            
-        except NoSuchWindowException:
-            logging.warning(f"🏁  Browser windows was closed, end of script")
-            self.safe_exit()                 
-        except Exception as e:
-            logging.error(f"❌ Failed to inject SOC_id input field: {str(e)}")
-            self.inject_error_message(f"❌ Failed to inject SOC_id input field")
-
-    def _update_input_ui(self, is_valid: bool, message: str) -> None:
-        """Update the input field UI based on validation result"""
-        try:
-            color = 'green' if is_valid else 'orange'
-            border_color = 'green' if is_valid else 'orange'
-            
-            js_code = f"""
-                var input = document.getElementById('InjectedInput');
-                var guideText = document.getElementById('InjectedGuideText');
-                
-                if (input) {{
-                    input.style.borderColor = '{border_color}';
-                    input.style.borderWidth = '{'2px' if border_color else ''}';
-                }}
-                
-                if (guideText) {{
-                    guideText.textContent = '{message}';
-                    guideText.style.color = '{color}';
-                }}
-            """
-            self.driver.execute_script(js_code)
-            
-        except Exception as e:
-            logging.error(f"❌ Failed to update input UI: {str(e)}")
-
-    def _setup_input_monitoring(self) -> None:
-        """Set up Python-based input monitoring and validation"""
-        try:
-            # Add guide text using Python
-            guide_js = """
-                var guideText = document.createElement('div');
-                guideText.id = 'InjectedGuideText';
-                guideText.style.cssText = 'font-size: 12px; color: #666; margin-top: 5px; text-align: center;';
-                guideText.textContent = '☝ Enter SOC number and press Enter';
-                
-                var input = document.getElementById('InjectedInput');
-                input.parentNode.appendChild(guideText);
-            """
-            self.driver.execute_script(guide_js)
-            
-            # Set up Enter key listener with prevention of default behavior
-            enter_listener_js = """
-                document.getElementById('InjectedInput').addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter') {
-                        e.preventDefault(); // ⚠️ CRITICAL: Prevent form submission
-                        e.stopPropagation(); // ⚠️ Prevent event bubbling
-                        this.setAttribute('data-enter-pressed', 'true');
-                    }
-                });
-            """
-            self.driver.execute_script(enter_listener_js)
-            
-        except Exception as e:
-            logging.error(f"❌ Failed to set up input monitoring: {str(e)}")
-
-    def _validate_soc_input(self, value: str) -> tuple[bool, str]:
-        """Validate SOC input and return (is_valid, message)"""
-        value = value.strip()
-        
-        if not value:
-            return False, "⚠️ Empty value is not allowed"
-                            
-        # Check against the full pattern
-        pattern = re.compile(self.SOC_ID_PATTERN)
-        min_digits = 4 if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID else 7
-        if not pattern.match(value):
-            return False, f"⚠️ SOC id must to be at least {min_digits} digits"
-        
-        return True, "✅ Valid - Press Enter to continue"
-          
-    def SOC_details_opened_check(self) -> None:
+    def is_404_error_present(self) -> bool:
+        """Check if no 404 error"""
         try:
             self.driver.find_element(By.XPATH, "//h1[contains(@class, 'text-danger') and contains(text(), '404')]")
             logging.error(f"❌ Error 404, probably SOC {self.SOC_id} does not exist")
-            self.inject_error_message(f"❌ Error 404, probably SOC {self.SOC_id} does not exist{self.ERROR_MESSAGE_ENDING}.")
+            return True            
         except NoSuchElementException:
             logging.info("✅ Success: no error 404")
-    
-    def SOC_locked_check(self) -> None:
-        try:
-            li_locked = self.driver.find_element(By.XPATH, "//li[contains(text(), 'Locked')]")
-            logging.error(f"❌ SOC is locked, the script will be terminated: {li_locked.text}")
-            self.inject_error_message(f"❌ SOC is locked, the script cannot proceed, close this window: {li_locked.text}")
-        except NoSuchElementException:
-            logging.info("✅ Success: SOC is not locked")
-    
-    def access_denied_check(self):
-        # check for Access Denied
-        try:
-            access_denied = self.driver.find_element(By.XPATH, "//h1[contains(text(), 'Access Denied')]")
-            logging.error(f"❌ {access_denied.text} - Access denied, probably SOC {self.SOC_id} is archived or in improper state")
-            self.inject_error_message(f"❌ Access denied, probably SOC {self.SOC_id} is archived or in improper state{self.ERROR_MESSAGE_ENDING}.")
-        except NoSuchElementException:
-            logging.info("✅ Success: no access denied issue")
+            return False
 
-    def login_failed_check(self):
-        # check for login issue
-        try:
-            # check if li tag with parent div[contains(@class, 'text-danger')] contains any text
-            self.driver.find_element(By.XPATH, "//div[contains(@class, 'text-danger')]//li[text()]")
-            logging.error("❌ Login issue, check the password in ini-file.")
-            self.inject_error_message("❌ Login issue, check the password in ini-file, the script cannot proceed, close this window")
-        except NoSuchElementException:
-            logging.info("✅ Success: no login issue")
+    def is_url_contains_SOC_Details(self) -> bool:           
+        current_url = self.driver.current_url
+        if "/Soc/Details/" not in current_url:
+            logging.error(f"❌ Wrong page loaded: {current_url}. Expected SOC Details page.")
+            return False
+        return True
+                    
     
     def get_current_role(self) -> str:
         """Get the current role from the page using the role span element"""
@@ -334,6 +182,7 @@ class SOCBot(BaseWebBot):
             return "unknown"    
     
     def switch_role(self, role: str) -> None:
+        """Switch to the specified role using Kendo dropdown"""
         try:
             if self.get_current_role() == role:
                 logging.info(f"✅ The role is already {role}, no need to switch")
@@ -425,8 +274,13 @@ class SOCBot(BaseWebBot):
             self.inject_error_message(f"❌ Failed to accept SOC {self.SOC_id} for apply{self.ERROR_MESSAGE_ENDING}.")
 
     def update_points(self):
-        # Kendo API approach failed (becomes too complicated), because the Kendo dropdowns are created dynamically 
-        # by the updateOverrideFunctions.onGridDataBound() function, but they're not initialized yet when our script runs.
+        """
+        Update all points in the SOC
+        
+        💡 TIP: Kendo API approach failed (becomes too complicated), because the Kendo dropdowns are created dynamically 
+        by the updateOverrideFunctions.onGridDataBound() function, but they're not initialized yet when our script runs.
+        💡 TIP: This method uses traditional Selenium Select approach which is more reliable
+        """
         try:
             # change the value of Confirm Current State dropdown list for each point, for that
             # find all the elements with id=CurrentStateSelect that are not disabled
@@ -452,6 +306,7 @@ class SOCBot(BaseWebBot):
             self.inject_error_message(f"❌ Failed to update some points{self.ERROR_MESSAGE_ENDING}.")
                    
     def request_DB_for_SOC_id(self, SOC_id: str) -> str:
+        """Query database for full SOC ID when partial ID is provided"""
         SQL = self.SQL_template.format(soc_id=SOC_id)
 
         with SQLQueryDirect(
@@ -472,86 +327,10 @@ class SOCBot(BaseWebBot):
         return SOC_id
 
     def initialize_and_login(self):
+        """Initialize the bot and perform login using mixin methods"""
         self.navigate_to_base()
-
-        # login
-        try:
-            self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
-            if self.password != "INCORRECT PASSWORD":
-                self.driver.find_element(By.ID, "Password").send_keys(self.password)
-            else:
-                logging.error("❌ Password contains line break, cannot continue")
-                self.inject_error_message(f"❌ Password contains line break{self.ERROR_MESSAGE_ENDING}.")
-        except NoSuchElementException as e:
-            logging.error(f"❌ Failed to find 'Username' or 'Password' input fields: {str(e)}")
-            self.inject_error_message(f"❌ Failed to find 'Username' or 'Password' input fields {self.ERROR_MESSAGE_ENDING}.")
-        
-        if self.warning_message:
-            self.inject_info_message(self.warning_message, style_addons={'color': 'darkorange'})
-
-        self.inject_SOC_id_input()
-
-    def wait_for_soc_input_and_submit(self):
-        """Wait for SOC ID input and submit the form"""
-        try:
-            # the script will wait for MAX_WAIT_USER_INPUT_DELAY_SECONDS until ****
-            WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
-                self.WaitForSOCInput((By.ID, "InjectedInput"), self)  # Pass self as bot_instance
-            )
-            
-            # If browser closed, exit
-            if self._is_browser_closed():
-                logging.info("🏁 Browser closed by user during input")
-                self.safe_exit()
-            
-            logging.info(f"✅ Valid SOC id {self.SOC_id} entered - proceeding with authentication")            
-        except NoSuchWindowException:
-            logging.warning(f"🏁  Browser windows was closed, end of script")
-            self.safe_exit()
-        except Exception as e:
-            logging.error(f"❌ Failed to wait for SOC_id to be entered: {str(e)}")
-            self.inject_error_message(f"❌ Failed to wait for SOC_id to be entered{self.ERROR_MESSAGE_ENDING}.")
-
-
-        try:
-            # get the SOC_id from the injected input field and press the submit the form
-            raw_soc_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")
-            
-            # Strip leading zero if SOC ID is 8 digits and starts with 0
-            if len(raw_soc_id) == 8 and raw_soc_id.startswith('0'):
-                self.SOC_id = raw_soc_id[1:]  # Remove the first character
-                logging.info(f"🔧 Stripped leading zero: '{raw_soc_id}' -> '{self.SOC_id}'")
-            else:
-                self.SOC_id = raw_soc_id
-
-        except Exception as e:
-            logging.error(f"❌ Failed to get the SOC_id from the injected field: {str(e)}")
-            self.inject_error_message(f"❌ Failed to get SOC_id from the injected field{self.ERROR_MESSAGE_ENDING}.")
-
-        if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
-            if len(self.SOC_id) < 7:
-                try:
-                    full_SOC_id = self.request_DB_for_SOC_id(self.SOC_id)
-                    self.SOC_id = full_SOC_id
-                    if self.SOC_id is None:
-                        raise ValueError("SOC_id cannot be None")
-                except Exception as e:
-                    logging.error(f"❌ Failed to request DB: {str(e)}")
-                    self.inject_error_message(f"❌ Failed to request DB ({str(e)}){self.ERROR_MESSAGE_ENDING}.")                
-
-        try:
-            # press the login button - submit the form directly via JavaScript
-            # "form?.submit();"" is same as "if (form) form.submit();""
-            self.driver.execute_script("""
-                var form = document.querySelector('form');
-                form?.submit()
-            """)
-            logging.info("✅ Form submitted successfully")
-        except Exception as e:
-            logging.error(f"❌ Failed to submit the form: {str(e)}")
-            self.inject_error_message(f"❌ Failed to submit the form{self.ERROR_MESSAGE_ENDING}.")
-
-        self.login_failed_check()
+        # Use mixin method for login process
+        self.perform_login()
 
     def navigate_to_soc_and_check_status(self):
         """Navigate to SOC details page and check/update status if needed"""
@@ -559,7 +338,12 @@ class SOCBot(BaseWebBot):
         SOC_view_base_link = self.base_link + r"Soc/Details/"
         self.driver.get(SOC_view_base_link + self.SOC_id)
         
-        self.SOC_details_opened_check()
+        if self.is_404_error_present():
+            self.inject_error_message(f"❌ Error 404, probably SOC {self.SOC_id} does not exist{self.ERROR_MESSAGE_ENDING}.")
+
+        if not self.is_url_contains_SOC_Details():
+            self.inject_error_message(f"❌ Wrong page loaded, probably login issues{self.ERROR_MESSAGE_ENDING}.")
+
         SOC_status = self.get_SOC_status()
         logging.info(f"🔍 Initial SOC status: '{SOC_status}'")
 
@@ -595,7 +379,7 @@ class SOCBot(BaseWebBot):
             SOC_update_base_link = self.base_link + r"Soc/UpdateOverride/"
             self.driver.get(SOC_update_base_link + self.SOC_id) #example: http://eptw.sakhalinenergy.ru/Soc/UpdateOverride/1458894
 
-            # check if the SOC is locked or access is denied
+            # check if the SOC is locked or access is denied using mixin methods
             self.SOC_locked_check()
             self.access_denied_check()
 
@@ -625,69 +409,11 @@ class SOCBot(BaseWebBot):
             logging.error(f"❌ Failed to wait for user input ('Confirm' button): {str(e)}")
             self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button){self.ERROR_MESSAGE_ENDING}.")
 
-    def accept_SOC_to_apply(self) -> None:
-        """Accept SOC for apply and wait for status change"""
-        try:
-            old_status = self.get_SOC_status()
-            logging.info(f"⏳ Current SOC status: '{old_status}' - proceeding with accept for apply")
-                        
-            # Wait for Kendo components to initialize
-            self.wait_for_kendo_dropdown("ActionsList")
-                        
-            # Build the action value
-            action_value = f'/Soc/TriggerChangeWorkflowState/{self.SOC_id}?trigger=AcceptForApply'
-                       
-            # Set dropdown value
-            set_action_script = """
-                var dropdown = $('#ActionsList').data('kendoDropDownList');
-                console.log('Dropdown object:', dropdown);
-                console.log('Current value:', dropdown.value());
-                dropdown.value(arguments[0]);
-                dropdown.trigger('change');
-                return {
-                    success: true,
-                    newValue: dropdown.value(),
-                    text: dropdown.text()
-                };
-            """
-            result = self.driver.execute_script(set_action_script, action_value)
-            logging.info(f"✅ Action value set result: {result}")
-            
-            # Wait for value to be set with timeout handling
-            WebDriverWait(self.driver, 10).until(
-                lambda _: self.driver.execute_script(
-                    "return $('#ActionsList').data('kendoDropDownList').value() === arguments[0];",
-                    action_value
-                )
-            )
-                        
-            # Click apply button
-            self.click_button((By.ID, 'ApplyActionButton'))
-                       
-            # Wait for status to actually change with better error handling
-            logging.info(f"⏳ Waiting for status to change from '{old_status}'...")
-            try:
-                WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-                    lambda driver: self.get_SOC_status() != old_status
-                )
-                new_status = self.get_SOC_status()
-                logging.info(f"✅ SOC {self.SOC_id} successfully accepted - status changed to '{new_status}'")                                
-            except Exception as timeout_error:
-                logging.error(f"❌ Status did not change from '{old_status}' within timeout")
-                raise timeout_error
-                
-        except NoSuchWindowException:
-            logging.warning(f"🏁  Browser window was closed, end of script")
-            self.safe_exit()
-        except Exception as e:
-            logging.error(f"❌ Failed to accept SOC {self.SOC_id} for apply: {str(e)}")
-            self.inject_error_message(f"❌ Failed to accept SOC {self.SOC_id} for apply{self.ERROR_MESSAGE_ENDING}.")
-
     def run_automation(self):
         """Main automation workflow"""
         self.initialize_and_login()
         self.wait_for_soc_input_and_submit()
-        self.navigate_to_soc_and_check_status()
+        self.navigate_to_soc_and_check_status()        
         self.process_soc_roles()
         self.driver.quit()
 
