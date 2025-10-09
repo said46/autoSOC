@@ -16,7 +16,6 @@ from base_web_bot import BaseWebBot, message_box
 class autoSOC(BaseWebBot):
     def __init__(self):
         super().__init__()
-        self.list_of_overrides: list[dict[str, str]] = [] # A list of dictionaries where each dictionary represents an override.
         self.base_link = r"http://eptw-training.sakhalinenergy.ru"
         self.SOC_base_link = self.base_link + r"/SOC/EditOverrides/"
         self.EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"    
@@ -71,7 +70,6 @@ class autoSOC(BaseWebBot):
                     "AdditionalValueRemovedState": sheet.cell(row, 9).value
                 }
                 self.list_of_overrides.append(xlsx_override)
-                logging.info(f"📝 Loaded override {len(self.list_of_overrides)}: {tag_number}")
             
             # Load SOC ID
             self.SOC_id = str(sheet.cell(1, 12).value)
@@ -112,7 +110,7 @@ class autoSOC(BaseWebBot):
             ignored_exceptions = (NoSuchElementException, StaleElementReferenceException)
             element = WebDriverWait(
                 self.driver, 5, ignored_exceptions=ignored_exceptions
-            ).until(expected_conditions.element_to_be_clickable((By.XPATH, item_xpath)))
+            ).until(EC.element_to_be_clickable((By.XPATH, item_xpath)))
 
             time.sleep(self.time_delay)
             self.driver.execute_script("arguments[0].click();", element)
@@ -290,66 +288,14 @@ class autoSOC(BaseWebBot):
             logging.info("🚀 Starting autoSOC automation")
             
             self.login()
-            self.validate_configuration() 
-            self.navigate_to_edit_overrides()
-            
-            if not self.verify_edit_overrides_page_loaded():
-                raise Exception("Edit Overrides page not ready")
-
+            self.navigate_to_edit_overrides()            
             self.process_all_overrides()
                        
-            logging.info("✅ autoSOC automation completed successfully")            
+            logging.info("🏁 autoSOC automation completed successfully")
         except Exception as e:
             logging.error(f"❌ autoSOC automation failed: {e}")
             self.inject_error_message("Error " + f"Automation failed: {e}")
-        self.driver.quit()
-
-    def debug_instance_state(self):
-        """Debug method to check instance variables"""
-        logging.info("=== DEBUG INSTANCE STATE ===")
-        logging.info(f"list_of_overrides exists: {hasattr(self, 'list_of_overrides')}")
-        if hasattr(self, 'list_of_overrides'):
-            logging.info(f"list_of_overrides type: {type(self.list_of_overrides)}")
-            logging.info(f"list_of_overrides length: {len(self.list_of_overrides)}")
-            logging.info(f"list_of_overrides id: {id(self.list_of_overrides)}")
-        logging.info(f"user_name: {getattr(self, 'user_name', 'NOT SET')}")
-        logging.info(f"SOC_id: {getattr(self, 'SOC_id', 'NOT SET')}")
-        logging.info("============================")        
-
-    def validate_configuration(self):
-        """Validate that configuration was loaded correctly"""
-        if not hasattr(self, 'list_of_overrides') or not self.list_of_overrides:
-            raise Exception("No overrides loaded from Excel file")
-        
-        if not self.user_name or not self.password:
-            raise Exception("Username or password not loaded from Excel file")
-        
-        if not self.SOC_id or self.SOC_id == "None":
-            raise Exception("SOC ID not loaded from Excel file")
-        
-        logging.info(f"✅ Configuration validated: {len(self.list_of_overrides)} overrides, SOC: {self.SOC_id}")        
-
-    def verify_edit_overrides_page_loaded(self):
-        """Verify that the Edit Overrides page is properly loaded"""
-        try:
-            # Check for essential elements
-            required_elements = [
-                "TagNumber",
-                "Description", 
-                "AddOverrideBtn"
-            ]
-            
-            for element_id in required_elements:
-                element = self.driver.find_element(By.ID, element_id)
-                if not element.is_displayed():
-                    raise Exception(f"Required element {element_id} is not visible")
-            
-            logging.info("✅ Edit Overrides page verified and ready")
-            return True
-            
-        except Exception as e:
-            logging.error(f"❌ Edit Overrides page not properly loaded: {e}")
-            return False        
+        self.driver.quit() 
 
 # Main execution
 if __name__ == "__main__":
