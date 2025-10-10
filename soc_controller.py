@@ -453,7 +453,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
     # ===== MAIN AUTOMATION WORKFLOW =====
     
-    def run_automation(self):
+    def run(self, standalone=False):
         """
         Main automation workflow coordinating all SOC processing steps.
         
@@ -464,9 +464,10 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
         4. Process SOC through all required roles
         5. Clean up resources
         """
-        self.navigate_to_base()
-        self.enter_credentials_and_prepare_soc_input()
-        self.wait_for_soc_input_and_submit()
+        if standalone:
+            self.navigate_to_base()
+            self.enter_credentials_and_prepare_soc_input()
+            self.wait_for_soc_input_and_submit()
         self.navigate_to_soc_and_check_status()
         self.process_soc_roles()
         self.safe_exit()
@@ -474,4 +475,4 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 if __name__ == "__main__":
     # Entry point for script execution
     bot = SOC_Controller()
-    bot.run_automation()
+    bot.run(standalone=True)

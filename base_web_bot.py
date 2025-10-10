@@ -4,7 +4,6 @@ from selenium.webdriver.common.by import By
 import ctypes
 from typing import Union, TypedDict
 from abc import abstractmethod
-from typing import final
 
 from selenium.common.exceptions import (NoSuchWindowException, WebDriverException)
 from selenium.webdriver.support.wait import WebDriverWait

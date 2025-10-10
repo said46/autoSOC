@@ -494,8 +494,8 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
             self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button)")
     
     # ===== MAIN AUTOMATION WORKFLOW =====
-    
-    def run(self):
+        
+    def run_standalone(self, standalone=False):
         """
         Main method to run the SOC import automation workflow.
         
@@ -514,10 +514,11 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
         try:            
             logging.info("🚀 Starting SOC_Importer automation")
             
-            # Step 1-3: Authentication and SOC ID input
-            self.navigate_to_base()
-            self.enter_credentials_and_prepare_soc_input()
-            self.wait_for_soc_input_and_submit()
+            if standalone:
+                # Step 1-3: Authentication and SOC ID input
+                self.navigate_to_base()
+                self.enter_credentials_and_prepare_soc_input()
+                self.wait_for_soc_input_and_submit()
             
             # Step 4: Data loading
             self.load_overrides_from_export()
@@ -540,4 +541,4 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
 if __name__ == "__main__":
     # Entry point for script execution
     auto_soc = SOC_Importer()
-    auto_soc.run()
+    auto_soc.run_standalone()

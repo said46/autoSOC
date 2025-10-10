@@ -204,7 +204,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
                 controller = SOC_Controller()
                 controller.driver = self.driver  # Reuse the same browser session
                 controller.SOC_id = self.SOC_id  # Pass the SOC ID
-                controller.run_automation()
+                controller.run()
                 
             elif mode == 'import':
                 importer = SOC_Importer()
@@ -216,7 +216,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
                 exporter = SOC_Exporter()
                 exporter.driver = self.driver  # Reuse the same browser session
                 exporter.SOC_id = self.SOC_id  # Pass the SOC ID
-                exporter.run_automation()
+                exporter.run()
                 
             else:
                 raise ValueError(f"Unknown mode: {mode}")

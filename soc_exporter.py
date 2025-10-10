@@ -379,7 +379,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     
     # ===== AUTOMATION WORKFLOW COORDINATION =====
     
-    def run_automation(self):
+    def run(self, standalone=False):
         """
         Main automation workflow for exporting SOC overrides to Excel.
         
@@ -396,30 +396,25 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
         try:
             logging.info("🚀 Starting SOC to Excel export automation")
             
-            # Step 1: Navigate to base URL and prepare for authentication
-            self.navigate_to_base()
+            if standalone:
+                self.navigate_to_base()               
+                self.enter_credentials_and_prepare_soc_input()
+                self.wait_for_soc_input_and_submit()
             
-            # Step 2: Enter credentials and prepare SOC ID input
-            self.enter_credentials_and_prepare_soc_input()
-            
-            # Step 3: Wait for SOC ID input and submit
-            self.wait_for_soc_input_and_submit()
-            
-            # Step 4: Navigate to SOC Details page
+            # Navigate to SOC details page                
             self.navigate_to_soc_details()
            
-            # Step 5: Extract data and export to Excel
+            # Extract data and export to Excel
             self.extract_and_export_overrides()
 
-            # Step 6: Show final completion message
+            # Show final completion message
             completion_msg = "🏁 SOC export automation completed successfully"
             logging.info(completion_msg)
             self._inject_message_with_wait(completion_msg, style_addons={'color': 'blue'})            
             
         except Exception as e:
             logging.error(f"❌ SOC automation failed: {str(e)}")
-            error_msg = f"❌ SOC automation failed: {str(e)}"
-            
+            error_msg = f"❌ SOC automation failed: {str(e)}"            
             try:
                 self._inject_message_with_wait(error_msg, style_addons={'color': 'red'})
             except:
@@ -430,4 +425,4 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 if __name__ == "__main__":
     # Entry point for script execution
     bot = SOC_Exporter()
-    bot.run_automation()
+    bot.run(standalone=True)
