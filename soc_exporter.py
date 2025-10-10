@@ -27,13 +27,21 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     operations, making it a complete data backup solution.
     """       
     
-    def __init__(self):
+    def __init__(self, soc_id=None):
         """Initialize the SOC exporter with combined base and mixin functionality."""
         BaseWebBot.__init__(self)
         SOC_BaseMixin.__init__(self)
         self.load_configuration()
         self.SOC_ID_PATTERN = r"^\d{7,8}$"  # Standard SOC ID pattern
         self.SOC_id = None  # Will be set during user input
+
+        # Use provided SOC ID or maintain existing logic
+        if soc_id:
+            self.SOC_id = soc_id
+
+    def set_soc_id(self, soc_id: str) -> None:
+        """Set SOC ID externally for unified workflow."""
+        self.SOC_id = soc_id
 
     @property
     def base_link(self) -> str:

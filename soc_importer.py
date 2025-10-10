@@ -28,13 +28,21 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
     - User confirmation workflow management
     """
     
-    def __init__(self):
+    def __init__(self, soc_id=None):
         """Initialize the SOC importer with combined base and mixin functionality."""
         BaseWebBot.__init__(self)
         SOC_BaseMixin.__init__(self)
         self.load_configuration()
         # SOC_base_link will be constructed from the configured base_link
         self.SOC_base_link = self.base_link + r"Soc/EditOverrides/"
+
+        # Use provided SOC ID or maintain existing logic
+        if soc_id:
+            self.SOC_id = soc_id
+
+    def set_soc_id(self, soc_id: str) -> None:
+        """Set SOC ID externally for unified workflow."""
+        self.SOC_id = soc_id
 
     @property
     def base_link(self) -> str:

@@ -32,12 +32,20 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
     # In all cases override manipulation is the change of 2-options dropdown list from 1st option to 2nd one
     FINAL_STATE_DROPDOWN_INDEX = 1 
     
-    def __init__(self):
+    def __init__(self, soc_id=None):
         """Initialize the SOC controller with combined base and mixin functionality."""
         BaseWebBot.__init__(self)
         SOC_BaseMixin.__init__(self)
         self.warning_message: str | None = None  # Stores configuration warnings
         self.load_configuration()
+
+        # Use provided SOC ID or maintain existing logic
+        if soc_id:
+            self.SOC_id = soc_id
+
+    def set_soc_id(self, soc_id: str) -> None:
+        """Set SOC ID externally for unified workflow."""
+        self.SOC_id = soc_id
 
     # ===== PROPERTY DEFINITIONS =====
     

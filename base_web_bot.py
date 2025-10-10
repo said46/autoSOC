@@ -67,6 +67,32 @@ class BaseWebBot:
         options.add_argument("--disable-dev-shm-usage")  # Prevent shared memory issues
         return webdriver.Chrome(options=options)
     
+    def set_driver(self, driver):
+        """Allow external driver injection for session reuse."""
+        if self.driver:
+            self.driver.quit()  # Clean up existing driver
+        self.driver = driver    
+    
+    def use_existing_session(self, driver, soc_id: str = None) -> None:
+        """
+        Use an existing browser session instead of creating a new one.
+        
+        Args:
+            driver: Existing WebDriver instance
+            soc_id: Pre-obtained SOC ID (optional)
+        """
+        if self.driver and self.driver != driver:
+            self.driver.quit()  # Clean up existing driver if different
+        
+        self.driver = driver
+        self.session_reused = True
+        
+        if soc_id:
+            self.SOC_id = soc_id
+            logging.info(f"✅ Using existing session with SOC ID: {soc_id}")
+        else:
+            logging.info("✅ Using existing browser session")
+
     def safe_exit(self) -> None:
         """Clean up resources and exit safely, ensuring WebDriver is properly closed."""
         try:
