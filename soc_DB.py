@@ -6,7 +6,7 @@ class SQLQueryDirect:
     """
     Direct pymssql implementation without pandas
     """
-    
+
     def __init__(self, server: str, database: str, username: str, password: str, port: int = 1433):
         self.server = server
         self.database = database
@@ -37,18 +37,18 @@ class SQLQueryDirect:
             conn = self._get_connection()
             cursor = conn.cursor()
             cursor.execute(query)
-            
+
             # Get column names
             columns = [desc[0] for desc in cursor.description]
-            
+
             # Convert to list of dictionaries
             results = []
             for row in cursor.fetchall():
                 results.append(dict(zip(columns, row)))
-            
+
             logging.info(f"✅ Query executed successfully. Retrieved {len(results)} rows.")
             return results
-            
+
         except Exception as e:
             raise RuntimeError(f"Query execution failed: {e}") from e
 

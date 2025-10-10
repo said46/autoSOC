@@ -10,7 +10,7 @@ class ColoredFormatter(logging.Formatter):
         self.Fore = Fore
         self.Style = Style
         super().__init__()
-    
+
     def format(self, record):
         record.msg = f"{self.Fore.RED}{record.msg}{self.Style.RESET_ALL}"
         return super().format(record)
@@ -31,7 +31,7 @@ def logging_setup():
     # format_string = "%(asctime)s\tline: %(lineno)d\tfunction: %(funcName)s ---> %(message)s"
     format_string = "%(asctime)s\tmodule: %(module)s\tline: %(lineno)d\tfunction: %(funcName)s\tfile: %(filename)s ---> %(message)s"
     file_formatter = logging.Formatter(format_string)
-    
+
     if sys.stdout.isatty():
         # if in TTY use ColoredFormatter
         console_formatter = ColoredFormatter()
@@ -41,7 +41,7 @@ def logging_setup():
         # otherwise use plain Formatter
         console_formatter = logging.Formatter(format_string)
         print("👆 TTY is not detected")
-        
+
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
