@@ -2,11 +2,7 @@
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
-from selenium.common.exceptions import (
-    NoSuchElementException, TimeoutException, ElementNotInteractableException,
-    NoSuchWindowException
-)
-import time
+from selenium.common.exceptions import (TimeoutException, ElementNotInteractableException, NoSuchWindowException)
 import openpyxl as xl
 import json
 import configparser
@@ -20,7 +16,7 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
     def __init__(self):
         BaseWebBot.__init__(self)
         SOC_BaseMixin.__init__(self)
-        self.load_configuration()  # Load from SOC.ini
+        self.load_configuration()
         # SOC_base_link will be constructed from the configured base_link
         self.SOC_base_link = self.base_link + r"Soc/EditOverrides/"
         self.EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"    
@@ -91,45 +87,20 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
                 applied_state = sheet.cell(row, 5).value  # Column E
                 removed_state = sheet.cell(row, 7).value  # Column G
                 
+                # REWORK !!!!!!!
                 # Map to our existing override structure
                 xlsx_override = {
                     "TagNumber": tag_number,
-                    "Description": description or "FLT STATUS",  # Default if empty
-                    "OverrideType": "Digital",  # Default based on FLT STATUS
-                    "OverrideMethod": "Forced",  # Default based on "Форсировано"
+                    "Description": description,
+                    "OverrideType": "Digital", # - CHANGE
+                    "OverrideMethod": "Forced",  # - CHANGE
                     "Comment": comment,
-                    "AppliedState": applied_state or "Форсировано",  # Default from column E
-                    "AdditionalValueAppliedState": None,  # Not in new structure
-                    "RemovedState": removed_state or "Расфорсировано",  # Default from column G
-                    "AdditionalValueRemovedState": None  # Not in new structure
+                    "AppliedState": applied_state,
+                    "AdditionalValueAppliedState": None,  # - CHANGE
+                    "RemovedState": removed_state,
+                    "AdditionalValueRemovedState": None  # - CHANGE
                 }
-                self.list_of_overrides.append(xlsx_override)
-            
-            # Try to find SOC ID - might be in a different location now
-            self.SOC_id = None
-            soc_id_candidates = [
-                (1, 1),  # A1
-                (1, 2),  # B1  
-                (1, 3),  # C1
-                (2, 1),  # A2
-            ]
-            
-            for row, col in soc_id_candidates:
-                try:
-                    candidate = sheet.cell(row, col).value
-                    if candidate and str(candidate).strip():
-                        self.SOC_id = str(candidate).strip()
-                        logging.info(f"🔍 Found SOC ID at cell ({row},{col}): {self.SOC_id}")
-                        break
-                except:
-                    continue
-            
-            if not self.SOC_id:
-                logging.warning("⚠️  SOC ID not found in Excel, will need user input")
-            else:
-                logging.info(f"✅ SOC ID loaded: {self.SOC_id}")
-            
-            logging.info(f"✅ Configuration loaded successfully from Excel, {len(self.list_of_overrides)} overrides to add")                            
+                self.list_of_overrides.append(xlsx_override)                     
         except Exception as e:
             logging.error(f"❌ Failed to load configuration from Excel: {e}")
             self.inject_error_message("❌ Failed to load configuration from Excel")
@@ -247,20 +218,8 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
             
         except Exception as e:
             logging.error(f"❌ Failed to select '{text}' in dropdown {element_id}: {e}")
-            return False
-    
-    def initialize_and_login(self):
-        """Initialize the bot and perform login using mixin methods"""
-        self.navigate_to_base()
-        self.perform_login()
-    
-    def wait_for_soc_input_and_complete_login(self):
-        """Wait for SOC ID input and complete the login process"""
-        soc_id = self.wait_for_soc_input_and_submit()
-        if soc_id:
-            self.submit_form_with_soc_id(soc_id)
-        return soc_id
-      
+            return False    
+         
     def navigate_to_edit_overrides(self):
         """Navigate to Edit Overrides page"""
         try:
@@ -366,8 +325,9 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
             
             logging.info("🚀 Starting SOC_Importer automation")
             
-            self.initialize_and_login()
-            self.wait_for_soc_input_and_complete_login()
+            self.navigate_to_base()
+            self.perform_login()
+            self.wait_for_soc_input_and_submit()
             self.navigate_to_edit_overrides()
             self.SOC_locked_check()
             self.access_denied_check()

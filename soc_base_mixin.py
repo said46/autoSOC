@@ -338,7 +338,7 @@ class SOC_BaseMixin:
                 var form = document.querySelector('form');
                 form?.submit()
             """)
-            logging.info("✅ Form submitted successfully with SOC ID")
+            logging.info(f"✅ Form submitted successfully with {self.SOC_id}")
         except Exception as e:
             logging.error(f"❌ Failed to submit the form: {str(e)}")
             self.inject_error_message(f"❌ Failed to submit the form.")

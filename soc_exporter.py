@@ -150,16 +150,11 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             logging.error(f"❌ Failed to extract SOC overrides table: {str(e)}")
             return [], []
 
-    def navigate_to_soc_details(self) -> bool:
+    def navigate_to_soc_details(self):
         """
         Navigate to SOC Details page and verify successful loading
         """
-        try:
-            if not self.SOC_id:
-                logging.error("❌ SOC ID is not set - cannot navigate to SOC Details")
-                self.inject_error_message("❌ SOC ID is not available for navigation")
-                return False
-            
+        try:           
             soc_details_url = self.base_link + f"Soc/Details/{self.SOC_id}"
             logging.info(f"🌐 Navigating to SOC Details: {soc_details_url}")
             
@@ -176,18 +171,10 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             # Verify we're on SOC Details page
             self.url_contains_SOC_Details_check()
             
-            logging.info("✅ Successfully navigated to SOC Details page")
-            return True
-            
+            logging.info("✅ Successfully navigated to SOC Details page")            
         except Exception as e:
             logging.error(f"❌ Failed to navigate to SOC Details: {str(e)}")
             self.inject_error_message(f"❌ Navigation failed: {str(e)}")
-            return False
-
-    def initialize_and_login(self):
-        """Initialize the bot and perform login"""
-        self.navigate_to_base()
-        self.perform_login()
 
     def create_excel_file(self, headers: list, rows: list, filename: str = None) -> bool:
         """
@@ -264,15 +251,13 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
         try:
             logging.info("🚀 Starting SOC to Excel export automation")
             
-            # Step 1: Initialize and login
-            self.initialize_and_login()
+            self.navigate_to_base()
+            self.perform_login()
             
-            # Step 2: Get SOC ID input
             if not self.wait_for_soc_input_and_process():
                 self.inject_error_message(f"❌ Failed to get SOC ID input")
                 return
             
-            # Step 3: Navigate to SOC Details
             if not self.navigate_to_soc_details():
                 return
             
