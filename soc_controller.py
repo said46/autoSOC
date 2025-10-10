@@ -1,4 +1,4 @@
-# autoPoints.py
+# soc_controller.py
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import (NoSuchElementException, NoSuchWindowException)
 from selenium.webdriver.support.wait import WebDriverWait
@@ -9,25 +9,24 @@ import configparser
 
 import logging
 
-from autoDB import SQLQueryDirect
 from base_web_bot import BaseWebBot, message_box
-from soc_input_mixin import SOCInputMixin
+from soc_base_mixin import SOC_BaseMixin
 
-class SOCBot(BaseWebBot, SOCInputMixin):    
+class SOC_Controller(BaseWebBot, SOC_BaseMixin):    
     """Specialized bot for SOC points automation"""
     FINAL_STATE_DROPDOWN_INDEX = 1
     EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"    
     
     def __init__(self):
         BaseWebBot.__init__(self)
-        SOCInputMixin.__init__(self)
+        SOC_BaseMixin.__init__(self)
         self.warning_message: str | None = None
         self.load_configuration()
 
-    @property
+    @property    
     def base_link(self) -> str:
-        return self._base_link
-    
+        return self._base_link        
+   
     def _load_database_configuration(self, config: configparser.ConfigParser) -> None:
         """
         Load database configuration from config parser
@@ -71,7 +70,6 @@ class SOCBot(BaseWebBot, SOCInputMixin):
         💡 TIP: Using a separate method for database config keeps this method clean
         💡 TIP: All configuration-related logic is centralized in this method
         """
-        self.config_file = 'autoPoints.ini'
         config = configparser.ConfigParser(interpolation=None)
         config.read(self.config_file, encoding="utf8")
 
@@ -133,27 +131,9 @@ class SOCBot(BaseWebBot, SOCInputMixin):
             return status.lower()
         except Exception as e:
             logging.error(f"❌ Failed to get SOC status: {str(e)}")        
-            self.inject_error_message(f"❌ Failed to get SOC status: {str(e)}")
+            self.inject_error_message(f"❌ Failed to get SOC status: {str(e)} ")
             return ''
-    
-    def is_404_error_present(self) -> bool:
-        """Check if no 404 error"""
-        try:
-            self.driver.find_element(By.XPATH, "//h1[contains(@class, 'text-danger') and contains(text(), '404')]")
-            logging.error(f"❌ Error 404, probably SOC {self.SOC_id} does not exist")
-            return True            
-        except NoSuchElementException:
-            logging.info("✅ Success: no error 404")
-            return False
-
-    def is_url_contains_SOC_Details(self) -> bool:           
-        current_url = self.driver.current_url
-        if "/Soc/Details/" not in current_url:
-            logging.error(f"❌ Wrong page loaded: {current_url}. Expected SOC Details page.")
-            return False
-        return True
-                    
-    
+                           
     def get_current_role(self) -> str:
         """Get the current role from the page using the role span element"""
         try:
@@ -183,7 +163,7 @@ class SOCBot(BaseWebBot, SOCInputMixin):
             if self.get_current_role() == role:
                 logging.info(f"✅ The role is already {role}, no need to switch")
                 return
-            self.driver.get(self.base_link + r"User/ChangeRole")
+            self.driver.get(self._base_link + r"User/ChangeRole")
             
             # Wait for Kendo components to initialize
             self.wait_for_kendo_dropdown("CurrentRoleName")
@@ -212,7 +192,7 @@ class SOCBot(BaseWebBot, SOCInputMixin):
             self.safe_exit()           
         except Exception as e:
             logging.error(f"❌ Failed to switch the role: {str(e)}")
-            self.inject_error_message(f"❌ Failed to switch the role{self.ERROR_MESSAGE_ENDING}.")
+            self.inject_error_message(f"❌ Failed to switch the role")
 
     def accept_SOC_to_apply(self) -> None:
         """Accept SOC for apply and wait for status change"""
@@ -267,7 +247,7 @@ class SOCBot(BaseWebBot, SOCInputMixin):
             self.safe_exit()
         except Exception as e:
             logging.error(f"❌ Failed to accept SOC {self.SOC_id} for apply: {str(e)}")
-            self.inject_error_message(f"❌ Failed to accept SOC {self.SOC_id} for apply{self.ERROR_MESSAGE_ENDING}.")
+            self.inject_error_message(f"❌ Failed to accept SOC {self.SOC_id} for apply")
 
     def update_points(self):
         """
@@ -299,29 +279,8 @@ class SOCBot(BaseWebBot, SOCInputMixin):
                     message_box("⚠️  Точка не обновлена", f"{str(e)}", 0)
         except NoSuchElementException as e:
             logging.error(f"❌ Failed to update points: {str(e)}")
-            self.inject_error_message(f"❌ Failed to update some points{self.ERROR_MESSAGE_ENDING}.")
+            self.inject_error_message(f"❌ Failed to update some points")
                    
-    def request_DB_for_SOC_id(self, SOC_id: str) -> str:
-        """Query database for full SOC ID when partial ID is provided"""
-        SQL = self.SQL_template.format(soc_id=SOC_id)
-
-        with SQLQueryDirect(
-            server=self.db_server,
-            database=self.db_database,
-            username=self.db_username, 
-            password=self.db_password
-        ) as sql:
-            results = sql.execute(SQL)  # Now returns list of dicts, not DataFrame
-            if len(results) == 1:
-                SOC_id = str(results[0]['Id'])  # Access via dict key
-            else:
-                raise ValueError(f"Expected 1 row, got {len(results)}")
-        
-        if not isinstance(SOC_id, str) or len(SOC_id) < 7:
-            raise ValueError(f"{SOC_id} has to be string with len 7 or 8")
-        
-        return SOC_id
-
     def initialize_and_login(self):
         """Initialize the bot and perform login using mixin methods"""
         self.navigate_to_base()
@@ -331,14 +290,11 @@ class SOCBot(BaseWebBot, SOCInputMixin):
     def navigate_to_soc_and_check_status(self):
         """Navigate to SOC details page and check/update status if needed"""
         # open SOC details web page
-        SOC_view_base_link = self.base_link + r"Soc/Details/"
+        SOC_view_base_link = self._base_link + r"Soc/Details/"
         self.driver.get(SOC_view_base_link + self.SOC_id)
         
-        if self.is_404_error_present():
-            self.inject_error_message(f"❌ Error 404, probably SOC {self.SOC_id} does not exist{self.ERROR_MESSAGE_ENDING}.")
-
-        if not self.is_url_contains_SOC_Details():
-            self.inject_error_message(f"❌ Wrong page loaded, probably login issues{self.ERROR_MESSAGE_ENDING}.")
+        self.error_404_not_present_check()
+        self.url_contains_SOC_Details_check()
 
         SOC_status = self.get_SOC_status()
         logging.info(f"🔍 Initial SOC status: '{SOC_status}'")
@@ -361,7 +317,7 @@ class SOCBot(BaseWebBot, SOCInputMixin):
         if SOC_status not in self.good_statuses:
             logging.error(f'❌ SOC {self.SOC_id} status is "{SOC_status}", the script cannot proceed.')
             locator = (By.XPATH, "//div[@id='issowFormContainer']//div[contains(@class, 'user-form')]")
-            self.inject_error_message(f'❌ SOC {self.SOC_id} status is "{SOC_status}"{self.ERROR_MESSAGE_ENDING}.', 
+            self.inject_error_message(f'❌ SOC {self.SOC_id} status is "{SOC_status}"', 
                                         locator, style_addons={'width': '100%', 'align': 'center'})
 
     def process_soc_roles(self):
@@ -372,7 +328,7 @@ class SOCBot(BaseWebBot, SOCInputMixin):
             self.switch_role(SOC_role)
 
             # navigate to Edit Overrides page
-            SOC_update_base_link = self.base_link + r"Soc/UpdateOverride/"
+            SOC_update_base_link = self._base_link + r"Soc/UpdateOverride/"
             self.driver.get(SOC_update_base_link + self.SOC_id) #example: http://eptw.sakhalinenergy.ru/Soc/UpdateOverride/1458894
 
             # check if the SOC is locked or access is denied using mixin methods
@@ -403,16 +359,16 @@ class SOCBot(BaseWebBot, SOCInputMixin):
             self.safe_exit()
         except Exception as e:
             logging.error(f"❌ Failed to wait for user input ('Confirm' button): {str(e)}")
-            self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button){self.ERROR_MESSAGE_ENDING}.")
+            self.inject_error_message(f"❌ Failed to wait for user input ('Confirm' button)")
 
     def run_automation(self):
         """Main automation workflow"""
         self.initialize_and_login()
         self.wait_for_soc_input_and_submit()
-        self.navigate_to_soc_and_check_status()        
+        self.navigate_to_soc_and_check_status()
         self.process_soc_roles()
         self.driver.quit()
 
 if __name__ == "__main__":
-    bot = SOCBot()
+    bot = SOC_Controller()
     bot.run_automation()

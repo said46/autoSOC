@@ -6,8 +6,7 @@ from typing import Union, TypedDict
 from abc import abstractmethod
 from typing import final
 
-from selenium.common.exceptions import NoSuchWindowException
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import (NoSuchWindowException, NoSuchElementException, WebDriverException)
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
@@ -59,12 +58,11 @@ class BaseWebBot:
         """Final method that uses the abstract base_link property"""
         try:
             self.driver.maximize_window()
-            self.driver.get(self.base_link)  # Uses the abstract property
+            self.driver.get(self._base_link)  # Uses the abstract property
         except WebDriverException as e:
             logging.error(f"❌ Failed to load {self.base_link} - {e.__class__.__name__}")
             self.inject_error_message(f"❌ Cannot access {self.base_link}. Check network connection.")    
-    
-    
+        
     def safe_exit(self) -> None:
         """Clean up resources and exit safely"""
         try:
@@ -128,6 +126,7 @@ class BaseWebBot:
         """Inject error message and wait for browser closure"""
         if style_addons is None:
             style_addons = self.default_style_addons
+        msg_text = msg_text + self.ERROR_MESSAGE_ENDING
         self._inject_message_with_wait(msg_text, locator, style_addons)
     
     def inject_info_message(self, msg_text: str, locator: tuple[str, str] = None, style_addons: StyleAddons = None) -> None:
