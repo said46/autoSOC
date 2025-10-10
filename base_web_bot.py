@@ -6,7 +6,7 @@ from typing import Union, TypedDict
 from abc import abstractmethod
 from typing import final
 
-from selenium.common.exceptions import (NoSuchWindowException, NoSuchElementException, WebDriverException)
+from selenium.common.exceptions import (NoSuchWindowException, WebDriverException)
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
@@ -17,54 +17,58 @@ import sys
 import logging
 from logging_setup import logging_setup
 
+
 def message_box(title, text, style):
+    """Display a Windows message box using ctypes"""
     return ctypes.windll.user32.MessageBoxW(0, text, title, style)
 
-# typed dictionary for additional CSS styles
-# total=True if all keys are required
+
+# Typed dictionary for additional CSS styles in message injection
+# total=False makes all keys optional
 class StyleAddons(TypedDict, total=False):
     color: str
     width: Union[str, None]
-    align: str   
+    align: str
+
 
 class BaseWebBot:
-    """Base class for web automation bots with common functionality"""
+    """
+    Base class for web automation bots with common functionality.
+    
+    This abstract class provides foundational methods for web automation including:
+    - WebDriver management and configuration
+    - Error handling and exception management
+    - Message injection for user feedback
+    - Browser state monitoring
+    - Common interaction patterns
+    
+    Child classes must implement the abstract base_link property.
+    """
     
     def __init__(self):
+        """Initialize the web bot with logging, exception handling, and WebDriver setup."""
         logging_setup() 
         self.setup_global_exception_handler()        
         self.driver = self.create_driver()
         self.default_style_addons = {'color': 'red', 'width': None, 'align': 'center'}
-        self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = 300 # default if not redefined in a child
-        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = 20   # default if not redefined in a child
+        self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = 300  # Default timeout for user actions
+        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = 20    # Default timeout for page loads
         self.ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
-           
+    
+    # ===== CORE WEBDRIVER MANAGEMENT =====
+    
     def create_driver(self) -> WebDriver:
-        """Create and configure WebDriver instance"""
+        """Create and configure a Chrome WebDriver instance with optimized options."""
         options = Options()
+        # Suppress unnecessary logging and errors
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        options.add_argument("--log-level=3")
-        options.add_argument("--silent")
-        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--log-level=3")  # Only fatal errors
+        options.add_argument("--silent")  # Suppress console output
+        options.add_argument("--disable-dev-shm-usage")  # Prevent shared memory issues
         return webdriver.Chrome(options=options)
     
-    @property
-    @abstractmethod
-    def base_link(self) -> str:
-        """Child classes MUST define this property"""
-        pass     
-    
-    def navigate_to_base(self) -> None:
-        """Final method that uses the abstract base_link property"""
-        try:
-            self.driver.maximize_window()
-            self.driver.get(self._base_link)  # Uses the abstract property
-        except WebDriverException as e:
-            logging.error(f"❌ Failed to load {self.base_link} - {e.__class__.__name__}")
-            self.inject_error_message(f"❌ Cannot access {self.base_link}. Check network connection.")    
-        
     def safe_exit(self) -> None:
-        """Clean up resources and exit safely"""
+        """Clean up resources and exit safely, ensuring WebDriver is properly closed."""
         try:
             if hasattr(self, 'driver') and self.driver:
                 self.driver.quit()
@@ -73,26 +77,55 @@ class BaseWebBot:
         finally:
             sys.exit()
     
+    # ===== ABSTRACT PROPERTIES (MUST BE IMPLEMENTED BY CHILD CLASSES) =====
+    
+    @property
+    @abstractmethod
+    def base_link(self) -> str:
+        """Child classes MUST define this property to specify the base URL."""
+        pass
+    
+    # ===== NAVIGATION METHODS =====
+    
+    def navigate_to_base(self) -> None:
+        """Navigate to the base URL defined by child classes, maximizing the browser window."""
+        try:
+            self.driver.maximize_window()
+            self.driver.get(self.base_link)  # Uses the abstract property
+        except WebDriverException as e:
+            logging.error(f"❌ Failed to load {self.base_link} - {e.__class__.__name__}")
+            self.inject_error_message(f"❌ Cannot access {self.base_link}. Check network connection.")
+    
+    # ===== EXCEPTION AND ERROR HANDLING =====
+    
     def setup_global_exception_handler(self):
-        """Handle uncaught exceptions to ensure cleanup"""
+        """Set up a global exception handler to ensure proper cleanup on unexpected errors."""
         def handle_exception(exc_type, exc_value, exc_traceback):
             if issubclass(exc_type, KeyboardInterrupt):
+                # Allow normal handling of Ctrl+C
                 sys.__excepthook__(exc_type, exc_value, exc_traceback)
                 return
             logging.error("💥 Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
             self.safe_exit()
         sys.excepthook = handle_exception
     
+    # ===== BROWSER STATE MONITORING =====
+    
     def _is_browser_closed(self) -> bool:
-        """Check if browser window is actually closed"""
+        """Check if the browser window has been closed by the user."""
         try:
-            _ = self.driver.current_url
+            _ = self.driver.current_url  # Will raise exception if browser is closed
             return False
         except Exception:
             return True
     
     def _wait_for_browser_to_close(self, timeout=None) -> None:
-        """Wait for browser close with quick polling"""
+        """
+        Wait for the browser to be closed by the user with periodic status updates.
+        
+        Args:
+            timeout: Maximum time to wait in seconds (defaults to MAX_WAIT_USER_INPUT_DELAY_SECONDS)
+        """
         if timeout is None:
             timeout = self.MAX_WAIT_USER_INPUT_DELAY_SECONDS
         
@@ -101,6 +134,7 @@ class BaseWebBot:
                 if self._is_browser_closed():
                     logging.info("✅ Browser closed by user")
                     break
+                # Log status every 30 seconds to avoid spam
                 if i % 30 == 0:
                     remaining = timeout - i
                     logging.info(f"⏳ Waiting for browser close... ({remaining}s remaining)")
@@ -110,8 +144,18 @@ class BaseWebBot:
         finally:
             self.safe_exit()
     
+    # ===== ELEMENT INTERACTION METHODS =====
+    
     def click_button(self, locator: tuple[str, str]):
-        """Click on element with waiting"""
+        """
+        Click on a web element with explicit waiting for it to be clickable.
+        
+        Args:
+            locator: Tuple of (By strategy, locator value) e.g., (By.ID, "submit-button")
+            
+        Raises:
+            Exception: If element is not found or not clickable within timeout
+        """
         try:
             element = WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
                 EC.element_to_be_clickable(locator)
@@ -120,23 +164,63 @@ class BaseWebBot:
         except Exception as e:
             logging.error(f"❌ Failed to click element with locator {locator}: {str(e)}")
             raise
+    
+    def wait_for_kendo_dropdown(self, element_id: str, timeout: int = 10) -> None:
+        """
+        Wait for a Kendo UI DropDownList to be fully initialized and ready.
         
+        Args:
+            element_id: HTML ID of the Kendo dropdown element
+            timeout: Maximum time to wait in seconds
+        """
+        WebDriverWait(self.driver, timeout).until(
+            lambda _: self.driver.execute_script(
+                f"return typeof jQuery !== 'undefined' && jQuery('#{element_id}').data('kendoDropDownList') !== undefined;"
+            )
+        )
+    
+    # ===== MESSAGE INJECTION METHODS =====
+    
     def inject_error_message(self, msg_text: str, locator: tuple[str, str] = None, 
                              style_addons: StyleAddons = None) -> None:
-        """Inject error message and wait for browser closure"""
+        """
+        Inject an error message and wait for browser closure.
+        
+        Use for fatal errors where the script cannot continue.
+        
+        Args:
+            msg_text: The error message to display
+            locator: Optional tuple (By.XPATH, xpath) to position message relative to an element
+            style_addons: Optional CSS style overrides
+        """
         if style_addons is None:
             style_addons = self.default_style_addons
         msg_text = msg_text + self.ERROR_MESSAGE_ENDING
         self._inject_message_with_wait(msg_text, locator, style_addons)
     
-    def inject_info_message(self, msg_text: str, locator: tuple[str, str] = None, style_addons: StyleAddons = None) -> None:
-        """Inject info message (no waiting for browser closure)"""
+    def inject_info_message(self, msg_text: str, locator: tuple[str, str] = None, 
+                           style_addons: StyleAddons = None) -> None:
+        """
+        Inject an informational message without waiting for browser closure.
+        
+        Use for non-fatal notifications where the script continues execution.
+        
+        Args:
+            msg_text: The info message to display
+            locator: Optional tuple (By.XPATH, xpath) to position message relative to an element
+            style_addons: Optional CSS style overrides
+        """
         if style_addons is None:
             style_addons = self.default_style_addons        
         self._inject_message(msg_text, locator, style_addons)
     
-    def _inject_message_with_wait(self, msg_text: str, locator: tuple[str, str] = None, style_addons: StyleAddons = None) -> None:
-        """Inject message and wait for browser closure (for errors)"""
+    def _inject_message_with_wait(self, msg_text: str, locator: tuple[str, str] = None, 
+                                 style_addons: StyleAddons = None) -> None:
+        """
+        Internal method to inject message and wait for browser closure.
+        
+        Used for error scenarios where user intervention is required.
+        """
         if style_addons is None:
             style_addons = self.default_style_addons        
         self._inject_message(msg_text, locator, style_addons)
@@ -149,8 +233,16 @@ class BaseWebBot:
             logging.info(f"⏳ Browser open - waiting up to {self.MAX_WAIT_USER_INPUT_DELAY_SECONDS} seconds for user to close it")
             self._wait_for_browser_to_close()
     
-    def _inject_message(self, msg_text: str, locator: tuple[str, str] = None, style_addons: StyleAddons = None) -> None:
-        """Core message injection logic"""
+    def _inject_message(self, msg_text: str, locator: tuple[str, str] = None, 
+                       style_addons: StyleAddons = None) -> None:
+        """
+        Core message injection logic using JavaScript execution.
+        
+        Args:
+            msg_text: The message text to inject
+            locator: Optional tuple for relative positioning
+            style_addons: Optional CSS style customization
+        """
         if style_addons is None:
             style_addons = self.default_style_addons        
         
@@ -176,21 +268,33 @@ class BaseWebBot:
         except Exception as e:
             logging.error(f"❌ Failed to inject message: {str(e)}")
     
-    def _get_injection_js_code(self, msg_text: str, xpath: str, position: str, style_addons: StyleAddons = None) -> str:
-        """Generate JavaScript code for message injection"""
+    def _get_injection_js_code(self, msg_text: str, xpath: str, position: str, 
+                              style_addons: StyleAddons = None) -> str:
+        """
+        Generate JavaScript code for DOM message injection.
         
+        Args:
+            msg_text: Text content of the message
+            xpath: XPath for relative positioning (if applicable)
+            position: "absolute" for fixed positioning, "relative" for element-relative
+            style_addons: CSS style customization options
+            
+        Returns:
+            JavaScript code as string for execution
+        """
         if style_addons is None:
             style_addons = self.default_style_addons        
         
-        # Extract values from style_addons
+        # Extract values from style_addons with defaults
         color = style_addons.get('color', self.default_style_addons['color'])
-        width = style_addons.get('width') # Returns None if key missing
+        width = style_addons.get('width')  # Returns None if key missing
         align = style_addons.get('align', self.default_style_addons['align'])
         
         # Build conditional width CSS
         width_css = f"width: {width};" if width else ""
         
         if position == "absolute":
+            # Fixed positioning at top of viewport
             return f"""
                 const div = document.createElement('div');
                 div.style.cssText = `
@@ -211,7 +315,7 @@ class BaseWebBot:
                 document.body.appendChild(div);
             """
         else:
-            # For relative positioning (with locator)
+            # Relative positioning near specified element
             return f"""
                 function getElementByXpath(path) {{
                     return document.evaluate(
@@ -236,11 +340,3 @@ class BaseWebBot:
                 div.textContent = `{msg_text}`;
                 parent_element.insertBefore(div, parent_element.firstChild);
             """
-        
-    def wait_for_kendo_dropdown(self, element_id: str, timeout: int = 10) -> None:
-        """Wait for Kendo UI DropDownList to be initialized"""
-        WebDriverWait(self.driver, timeout).until(
-            lambda _: self.driver.execute_script(
-                f"return typeof jQuery !== 'undefined' && jQuery('#{element_id}').data('kendoDropDownList') !== undefined;"
-            )
-        )

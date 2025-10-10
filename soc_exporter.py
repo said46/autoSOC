@@ -2,57 +2,83 @@
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import (NoSuchElementException, TimeoutException)
 from selenium.webdriver.support.wait import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import logging
 import configparser
 import openpyxl
 from openpyxl.utils import get_column_letter
 from datetime import datetime
-import time
 
 from base_web_bot import BaseWebBot
 from soc_base_mixin import SOC_BaseMixin
 
+
 class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     """
-    Specialized bot for exporting SOC (Safety Override Control) overrides table to Excel
-    """
+    Specialized bot for exporting SOC (Safety Override Certificate) overrides table to Excel.
     
-    EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"
+    This exporter combines web automation with Excel file generation to extract
+    SOC override data with complete re-import capability. It handles:
+    - SOC authentication and navigation
+    - Kendo Grid data extraction
+    - Excel file creation with proper formatting
+    - Error handling and user feedback
+    
+    The exported data includes all essential fields needed for potential re-import
+    operations, making it a complete data backup solution.
+    """       
     
     def __init__(self):
+        """Initialize the SOC exporter with combined base and mixin functionality."""
         BaseWebBot.__init__(self)
         SOC_BaseMixin.__init__(self)
         self.load_configuration()
-        self.SOC_ID_PATTERN = r"^\d{7,8}$"
-        self.SOC_id = None
+        self.SOC_ID_PATTERN = r"^\d{7,8}$"  # Standard SOC ID pattern
+        self.SOC_id = None  # Will be set during user input
 
     @property
     def base_link(self) -> str:
+        """Abstract property implementation - returns the base URL for navigation."""
         return self._base_link
     
+    # ===== CONFIGURATION MANAGEMENT =====
+    
     def load_configuration(self) -> None:
-        """Load configuration settings from the INI file"""
+        """
+        Load configuration settings from the INI file.
+        
+        Reads user credentials, application URLs, and timeout settings from
+        the SOC.ini configuration file.
+        """
         config = configparser.ConfigParser(interpolation=None)
         config.read(self.config_file, encoding="utf8")
 
+        # Load authentication and application settings
         self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
         
+        # Process password with base64 decoding fallback
         raw_password = config.get('Settings', 'password', fallback='******')
         self.password = self.process_password(raw_password)
         
+        # Check for password formatting issues
         if '\n' in self.password:
             self.password = 'INCORRECT PASSWORD'
             
         self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
-        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)
+        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=20)
 
         logging.info(f"✅ Configuration loaded from {self.config_file}")
-
+    
+    # ===== DATA EXTRACTION METHODS =====
+    
     def check_if_overrides_exist(self) -> bool:
         """
-        Check if there are any overrides for this SOC
-        Returns True if overrides exist, False otherwise
+        Check if there are any overrides for this SOC.
+        
+        Examines the overrides section on the SOC Details page to determine
+        if there is data available for export.
+        
+        Returns:
+            True if overrides exist, False otherwise
         """
         try:
             # Look for the overrides section and check if it contains data
@@ -76,7 +102,15 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
     def extract_overrides_table_data(self):
         """
-        Extract the overrides table data from SOC Details page using JavaScript
+        Extract the overrides table data from SOC Details page using JavaScript.
+        
+        Uses Kendo UI Grid API to extract comprehensive override data including
+        all essential fields needed for re-import capability.
+        
+        Returns:
+            Tuple of (headers, rows) where:
+            - headers: List of column names
+            - rows: List of data rows with override information
         """
         try:
             logging.info("🔍 Extracting SOC overrides table data via JavaScript...")
@@ -88,18 +122,18 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             
             # Wait for Kendo framework to load
             WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-                lambda driver: driver.execute_script("return typeof kendo !== 'undefined'")
+                lambda _: self.driver.execute_script("return typeof kendo !== 'undefined'")
             )
             
             # Wait for the Overrides grid to be initialized and have data
             WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-                lambda driver: driver.execute_script("""
+                lambda _: self.driver.execute_script("""
                     var grid = $('#Overrides').data('kendoGrid');
                     return grid && grid.dataSource && grid.dataSource.data().length > 0;
                 """)
             )
             
-            # Clean extraction script with guaranteed column alignment
+            # Enhanced extraction script with all essential fields for re-import
             script = """
             var grid = $('#Overrides').data('kendoGrid');
             if (!grid || !grid.dataSource) return null;
@@ -107,22 +141,37 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             var data = grid.dataSource.data();
             if (data.length === 0) return null;
             
-            // Get visible columns in display order
-            var visibleColumns = grid.columns.filter(col => 
-                col.field && col.title && col.hidden !== true
-            );
+            // Essential fields for re-import capability
+            var headers = [
+                'TagNumber', 
+                'Description', 
+                'OverrideType', 
+                'OverrideMethod', 
+                'AppliedState', 
+                'RemovedState', 
+                'Comment', 
+                'AdditionalValueAppliedState', 
+                'AdditionalValueRemovedState',
+                'CurrentState'
+            ];
             
-            // Extract headers and rows using the same column order
-            var headers = visibleColumns.map(col => col.title);
-            var rows = data.map(item => 
-                visibleColumns.map(col => {
-                    var value = item[col.field];
-                    if (value && typeof value === 'object') {
-                        return value.ShortForm || value.Title || value.Text || value.Name || '';
-                    }
-                    return value || '';
-                })
-            );
+            var rows = data.map(item => [
+                item.TagNumber || '',
+                item.Description || '',
+                // Extract OverrideType display text (ShortForm preferred, fallback to Title)
+                item.OverrideType ? (item.OverrideType.ShortForm || item.OverrideType.Title || '') : '',
+                // Extract OverrideMethod display text (ShortForm preferred, fallback to Title)
+                item.OverrideMethod ? (item.OverrideMethod.ShortForm || item.OverrideMethod.Title || '') : '',
+                // Extract AppliedState display text
+                item.OverrideAppliedState ? (item.OverrideAppliedState.Title || '') : '',
+                // Extract RemovedState display text
+                item.OverrideRemovedState ? (item.OverrideRemovedState.Title || '') : '',
+                item.Comment || '',
+                item.AdditionalValueAppliedState || '',
+                item.AdditionalValueRemovedState || '',
+                // Extract CurrentState for reference
+                item.CurrentState ? (item.CurrentState.Title || '') : ''
+            ]);
             
             return {headers: headers, rows: rows};
             """
@@ -138,6 +187,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             
             if headers and rows:
                 logging.info(f"✅ Successfully extracted SOC overrides: {len(headers)} columns, {len(rows)} rows")
+                logging.info(f"📊 Extracted fields: {', '.join(headers)}")
                 return headers, rows
             
             logging.info("ℹ️  No valid data extracted from Kendo Grid")
@@ -149,10 +199,15 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
         except Exception as e:
             logging.error(f"❌ Failed to extract SOC overrides table: {str(e)}")
             return [], []
-
-    def navigate_to_soc_details(self):
+    
+    # ===== NAVIGATION METHODS =====
+    
+    def navigate_to_soc_details(self) -> None:
         """
-        Navigate to SOC Details page and verify successful loading
+        Navigate to SOC Details page and verify successful loading.
+        
+        Constructs the SOC Details URL and performs various validation checks
+        to ensure the page loaded correctly.
         """
         try:           
             soc_details_url = self.base_link + f"Soc/Details/{self.SOC_id}"
@@ -165,26 +220,43 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                 lambda driver: driver.execute_script("return document.readyState") == "complete"
             )
             
-            # Check for 404 error
+            # Check for 404 error using mixin method
             self.error_404_not_present_check()
             
-            # Verify we're on SOC Details page
+            # Verify we're on SOC Details page using mixin method
             self.url_contains_SOC_Details_check()
             
             logging.info("✅ Successfully navigated to SOC Details page")            
         except Exception as e:
             logging.error(f"❌ Failed to navigate to SOC Details: {str(e)}")
             self.inject_error_message(f"❌ Navigation failed: {str(e)}")
-
+    
+    # ===== EXCEL EXPORT METHODS =====
+    
     def create_excel_file(self, headers: list, rows: list, filename: str = None) -> bool:
         """
-        Create Excel file with SOC overrides data using openpyxl
+        Create Excel file with SOC overrides data using openpyxl.
+        
+        Generates a formatted Excel file with:
+        - Metadata header with export information
+        - Bold column headers
+        - Auto-adjusted column widths
+        - Timestamp in filename for uniqueness
+        
+        Args:
+            headers: List of column names for the data
+            rows: List of data rows to export
+            filename: Optional custom filename, auto-generated if not provided
+            
+        Returns:
+            True if file was created successfully, False otherwise
         """
         if not headers or not rows:
             logging.error("❌ No data available to create Excel file")
             return False
             
         try:
+            # Generate filename with timestamp if not provided
             if filename is None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"soc_resources/SOC_{self.SOC_id}_overrides_{timestamp}.xlsx"
@@ -193,21 +265,29 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             sheet = workbook.active
             sheet.title = f'SOC_{self.SOC_id}'
             
-            # Write headers with bold formatting
+            # Add metadata header
+            sheet.cell(row=1, column=1, value="SOC Overrides Export")
+            sheet.cell(row=2, column=1, value=f"SOC ID: {self.SOC_id}")
+            sheet.cell(row=3, column=1, value=f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            sheet.cell(row=4, column=1, value=f"Total Overrides: {len(rows)}")
+            
+            # Write headers with bold formatting (starting from row 6)
+            header_row = 6
             for col_index, header in enumerate(headers, 1):
-                cell = sheet.cell(row=1, column=col_index, value=header)
+                cell = sheet.cell(row=header_row, column=col_index, value=header)
                 cell.font = openpyxl.styles.Font(bold=True)
             
-            # Write data rows
-            for row_index, row_data in enumerate(rows, 2):
+            # Write data rows (starting from row 7)
+            for row_index, row_data in enumerate(rows, header_row + 1):
                 for col_index, cell_value in enumerate(row_data, 1):
                     sheet.cell(row=row_index, column=col_index, value=cell_value)
             
-            # Auto-adjust column widths
+            # Auto-adjust column widths for better readability
             self._auto_adjust_column_widths(sheet, headers, rows)
             
             workbook.save(filename)
             logging.info(f"💾 Successfully saved SOC overrides to: {filename}")
+            logging.info(f"📝 Export includes {len(rows)} overrides with fields: {', '.join(headers)}")
             return True
             
         except Exception as e:
@@ -216,7 +296,15 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
     def _auto_adjust_column_widths(self, sheet, headers: list, rows: list) -> None:
         """
-        Automatically adjust column widths based on content length
+        Automatically adjust column widths based on content length.
+        
+        Calculates optimal column widths by finding the maximum length of
+        content in each column and applies appropriate widths.
+        
+        Args:
+            sheet: The openpyxl worksheet to adjust
+            headers: List of column headers
+            rows: List of data rows
         """
         try:
             max_lengths = []
@@ -233,9 +321,9 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                         if cell_length > max_lengths[col_index]:
                             max_lengths[col_index] = cell_length
             
-            # Apply calculated widths
+            # Apply calculated widths (starting from column A for data headers)
             for col_index, max_len in enumerate(max_lengths, 1):
-                adjusted_width = min(max_len + 2, 50)
+                adjusted_width = min(max_len + 2, 50)  # Cap at 50 characters
                 column_letter = get_column_letter(col_index)
                 sheet.column_dimensions[column_letter].width = adjusted_width
                 
@@ -243,25 +331,18 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             
         except Exception as e:
             logging.warning(f"⚠️  Could not auto-adjust column widths: {str(e)}")
-
-    def run_automation(self):
+    
+    # ===== MAIN EXPORT WORKFLOW =====
+    
+    def extract_and_export_overrides(self) -> None:
         """
-        Main automation workflow for exporting SOC overrides to Excel
+        Extract overrides data and export to Excel file.
+        
+        Main export method that coordinates data extraction and file creation,
+        providing appropriate user feedback for both success and failure scenarios.
         """
         try:
-            logging.info("🚀 Starting SOC to Excel export automation")
-            
-            self.navigate_to_base()
-            self.perform_login()
-            
-            if not self.wait_for_soc_input_and_process():
-                self.inject_error_message(f"❌ Failed to get SOC ID input")
-                return
-            
-            if not self.navigate_to_soc_details():
-                return
-            
-            # Step 4: Extract table data
+            # Extract table data with enhanced fields
             headers, rows = self.extract_overrides_table_data()
             
             if not headers or not rows:
@@ -270,10 +351,11 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                 # Use _inject_message_with_wait to display message and wait for browser close
                 self._inject_message_with_wait(info_msg, style_addons={'color': 'orange'})
             else:
-                # Step 5: Create Excel file
+                # Create Excel file with enhanced data
                 if self.create_excel_file(headers, rows):
                     success_msg = f"✅ SOC {self.SOC_id} overrides successfully exported to Excel"
                     logging.info(success_msg)
+                    logging.info(f"📊 Exported {len(rows)} overrides with complete re-import capability")
                     # Use _inject_message_with_wait to display success message and wait for browser close
                     self._inject_message_with_wait(success_msg, style_addons={'color': 'green'})
                 else:
@@ -281,20 +363,63 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                     self.inject_error_message(error_msg)
                     # Use _inject_message_with_wait for error case too
                     self._inject_message_with_wait(error_msg, style_addons={'color': 'red'})
+                    
+        except Exception as e:
+            logging.error(f"❌ Error during extraction and export: {str(e)}")
+            error_msg = f"❌ Error during extraction and export: {str(e)}"
+            self._inject_message_with_wait(error_msg, style_addons={'color': 'red'})
+    
+    # ===== AUTOMATION WORKFLOW COORDINATION =====
+    
+    def run_automation(self):
+        """
+        Main automation workflow for exporting SOC overrides to Excel.
+        
+        Execution sequence:
+        1. Navigate to base URL and prepare for authentication
+        2. Enter credentials and prepare SOC ID input
+        3. Wait for SOC ID input and submit form
+        4. Navigate to SOC Details page
+        5. Extract data and export to Excel
+        6. Provide completion feedback
+        
+        Enhanced with comprehensive logging and error handling throughout the process.
+        """
+        try:
+            logging.info("🚀 Starting SOC to Excel export automation")
+            
+            # Step 1: Navigate to base URL and prepare for authentication
+            self.navigate_to_base()
+            
+            # Step 2: Enter credentials and prepare SOC ID input
+            self.enter_credentials_and_prepare_soc_input()
+            
+            # Step 3: Wait for SOC ID input and submit
+            self.wait_for_soc_input_and_submit()
+            
+            # Step 4: Navigate to SOC Details page
+            self.navigate_to_soc_details()
+           
+            # Step 5: Extract data and export to Excel
+            self.extract_and_export_overrides()
+
+            # Step 6: Show final completion message
+            completion_msg = "🏁 SOC export automation completed successfully"
+            logging.info(completion_msg)
+            self._inject_message_with_wait(completion_msg, style_addons={'color': 'blue'})            
             
         except Exception as e:
             logging.error(f"❌ SOC automation failed: {str(e)}")
             error_msg = f"❌ SOC automation failed: {str(e)}"
+            
             try:
                 self._inject_message_with_wait(error_msg, style_addons={'color': 'red'})
             except:
-                # If injection fails, just quit
-                if hasattr(self, 'driver'):
-                    self.driver.quit()
-        finally:
-            # Clean up - _inject_message_with_wait already handles browser closing
-            pass
+                # If injection fails, just quit safely
+                self.safe_exit()        
+
 
 if __name__ == "__main__":
+    # Entry point for script execution
     bot = SOC_Exporter()
     bot.run_automation()
