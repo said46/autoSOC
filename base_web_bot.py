@@ -54,6 +54,13 @@ class BaseWebBot:
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = 20    # Default timeout for page loads
         self.ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
 
+    def process_exception(self, msg: str, e: Exception = None, include_exception_text_to_log = True) -> None:
+        if e and include_exception_text_to_log:
+            logging.error(f"{msg}: {str(e)}")
+        else:
+            logging.error(msg)
+        self.inject_error_message(msg)
+    
     # ===== CORE WEBDRIVER MANAGEMENT =====
 
     def create_driver(self) -> WebDriver:
@@ -165,7 +172,7 @@ class BaseWebBot:
                     logging.info(f"⏳ Waiting for browser close... ({remaining}s remaining)")
                 time.sleep(1)
             else:
-                logging.info(f"⏰ {timeout} second timeout reached - forcing exit")
+                logging.info(f"⏰ {timeout} seconds timeout reached - forcing exit")
         finally:
             self.safe_exit()
 

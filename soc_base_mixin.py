@@ -6,9 +6,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import (NoSuchElementException, NoSuchWindowException,
                                       WebDriverException)
-
 from soc_DB import SQLQueryDirect
-
 
 class SOC_BaseMixin:
     """
@@ -110,6 +108,10 @@ class SOC_BaseMixin:
                 # Browser closed - return True to break the wait
                 return True
 
+        def _is_browser_closed(self):
+            """Use the parent class method to check if browser is closed"""
+            return self.soc_mixin._is_browser_closed()                
+
     # ===== PASSWORD PROCESSING =====
 
     def process_password(self, password: str) -> str:
@@ -152,7 +154,7 @@ class SOC_BaseMixin:
             if self.password != "INCORRECT PASSWORD":
                 self.driver.find_element(By.ID, "Password").send_keys(self.password)
             else:
-                logging.error("❌ Password contains line break, cannot continue")
+                logging.error("❌ Password contains line break")
                 self.inject_error_message(f"❌ Password contains line break.")
         except NoSuchElementException as e:
             logging.error(f"❌ Failed to find 'Username' or 'Password' input fields: {str(e)}")
@@ -411,14 +413,12 @@ class SOC_BaseMixin:
             logging.info(f"✅ Processed SOC id is {self.SOC_id}, continue submitting the form")
             self.submit_form_with_soc_id()
 
-        except NoSuchWindowException:
+        except (NoSuchWindowException, WebDriverException):
             logging.warning(f"🏁  Browser windows was closed, end of script")
             self.safe_exit()
-            return ""
         except Exception as e:
             logging.error(f"❌ Failed to wait for SOC_id to be entered: {str(e)}")
             self.inject_error_message(f"❌ Failed to wait for SOC_id to be entered.")
-            return ""
 
     def submit_form_with_soc_id(self) -> None:
         """

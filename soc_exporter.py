@@ -15,6 +15,7 @@ from soc_base_mixin import SOC_BaseMixin
 class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     """
     Specialized bot for exporting SOC overrides table to Excel.
+    Exports data in the same format expected by the SOC_Importer.
     """
 
     def __init__(self, soc_id=None):
@@ -66,6 +67,13 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             return False
 
     def extract_overrides_table_data(self):
+        """
+        Extract SOC overrides data matching the importer's expected format.
+        
+        Expected column order for importer:
+        TagNumber, Description, OverrideType, OverrideMethod, Comment, 
+        AppliedState, AdditionalValueAppliedState, RemovedState, AdditionalValueRemovedState
+        """
         try:
             logging.info("🔍 Extracting SOC overrides data...")
 
@@ -91,10 +99,10 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             var data = grid.dataSource.data();
             if (data.length === 0) return null;
 
+            // Match the importer's expected column order (9 columns)
             var headers = [
-                'TagNumber', 'Description', 'OverrideType', 'OverrideMethod', 
-                'AppliedState', 'RemovedState', 'Comment', 
-                'AdditionalValueAppliedState', 'AdditionalValueRemovedState', 'CurrentState'
+                'TagNumber', 'Description', 'OverrideType', 'OverrideMethod', 'Comment',
+                'AppliedState', 'AdditionalValueAppliedState', 'RemovedState', 'AdditionalValueRemovedState'
             ];
 
             var rows = data.map(item => [
@@ -102,12 +110,11 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                 item.Description || '',
                 item.OverrideType ? (item.OverrideType.Title || '') : '',
                 item.OverrideMethod ? (item.OverrideMethod.Title || '') : '',
-                item.OverrideAppliedState ? (item.OverrideAppliedState.Title || '') : '',
-                item.OverrideRemovedState ? (item.OverrideRemovedState.Title || '') : '',
                 item.Comment || '',
+                item.OverrideAppliedState ? (item.OverrideAppliedState.Title || '') : '',
                 item.AdditionalValueAppliedState || '',
-                item.AdditionalValueRemovedState || '',
-                item.CurrentState ? (item.CurrentState.Title || '') : ''
+                item.OverrideRemovedState ? (item.OverrideRemovedState.Title || '') : '',
+                item.AdditionalValueRemovedState || ''
             ]);
 
             return {headers: headers, rows: rows};
@@ -122,6 +129,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
             if headers and rows:
                 logging.info(f"✅ Extracted {len(rows)} overrides with {len(headers)} columns")
+                logging.info(f"📊 Columns: {', '.join(headers)}")
                 return headers, rows
 
             return [], []
@@ -149,18 +157,27 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
             logging.info("✅ Successfully navigated to SOC Details")
         except Exception as e:
-            logging.error(f"❌ Navigation failed: {e}")
-            self.inject_error_message(f"❌ Navigation failed: {e}")
+            self.process_exception("❌ Navigation failed", e)
 
     def create_excel_file(self, headers: list, rows: list, filename: str = None) -> bool:
+        """
+        Create Excel file with fixed column order matching the importer's expectations.
+        
+        File structure:
+        - Rows 1-4: Metadata
+        - Row 6: Headers (fixed order for importer)
+        - Rows 7+: Data rows
+        """
         if not headers or not rows:
             logging.error("❌ No data to export")
             return False
 
         try:
+            # Use fixed filename for importer compatibility
             if filename is None:
+                #filename = f"soc_import_export/overrides.xlsx"
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"soc_import_export/SOC_{self.SOC_id}_overrides_{timestamp}.xlsx"
+                filename = f"soc_import_export/SOC_{self.SOC_id}_overrides_{timestamp}.xlsx"                
 
             workbook = openpyxl.Workbook()
             sheet = workbook.active
@@ -171,18 +188,23 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                 "SOC Overrides Export",
                 f"SOC ID: {self.SOC_id}",
                 f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                f"Total Overrides: {len(rows)}"
+                f"Total Overrides: {len(rows)}",
+                "",  # Empty row for spacing
+                # Row 6 will contain headers
             ]
             for i, value in enumerate(metadata, 1):
                 sheet.cell(row=i, column=1, value=value)
 
-            # Write headers
+            # Write headers at row 6 (matching importer expectation)
             header_row = 6
             for col_index, header in enumerate(headers, 1):
                 cell = sheet.cell(row=header_row, column=col_index, value=header)
                 cell.font = openpyxl.styles.Font(bold=True)
+                
+                # Add light background color to headers
+                cell.fill = openpyxl.styles.PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
 
-            # Write data
+            # Write data starting from row 7 (matching importer expectation)
             for row_index, row_data in enumerate(rows, header_row + 1):
                 for col_index, cell_value in enumerate(row_data, 1):
                     sheet.cell(row=row_index, column=col_index, value=cell_value)
@@ -192,6 +214,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
             workbook.save(filename)
             logging.info(f"💾 Saved to: {filename}")
+            logging.info(f"📁 File ready for import with {len(rows)} overrides")
             return True
 
         except Exception as e:
@@ -199,6 +222,9 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             return False
 
     def _auto_adjust_column_widths(self, sheet, headers: list, rows: list) -> None:
+        """
+        Auto-adjust column widths for better readability.
+        """
         try:
             max_lengths = [len(str(header)) for header in headers]
 
@@ -218,6 +244,9 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             logging.warning(f"⚠️ Could not adjust column widths: {e}")
 
     def extract_and_export_overrides(self) -> None:
+        """
+        Extract overrides and export to Excel in importer-compatible format.
+        """
         try:
             headers, rows = self.extract_overrides_table_data()
 
@@ -227,9 +256,9 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                 self._inject_message_with_wait(msg, style_addons={'color': 'orange'})
             else:
                 if self.create_excel_file(headers, rows):
-                    msg = f"✅ SOC {self.SOC_id} overrides exported successfully"
+                    msg = f"✅ SOC {self.SOC_id} overrides exported successfully ({len(rows)} records)"
                     logging.info(msg)
-                    self._inject_message_with_wait(msg, style_addons={'color': 'green'})
+                    self._inject_message_with_wait(msg, style_addons={'color': 'darkorange'})
                 else:
                     msg = f"❌ Failed to save Excel for SOC {self.SOC_id}"
                     self._inject_message_with_wait(msg, style_addons={'color': 'red'})
@@ -239,6 +268,9 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             self._inject_message_with_wait(f"❌ Export error: {e}", style_addons={'color': 'red'})
 
     def run(self, standalone=False):
+        """
+        Main execution workflow for SOC export.
+        """
         try:
             logging.info("🚀 Starting SOC export")
 

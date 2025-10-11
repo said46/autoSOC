@@ -1,13 +1,11 @@
 # soc_importer.py
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
-from selenium.common.exceptions import (TimeoutException, NoSuchWindowException)
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import (TimeoutException, NoSuchWindowException, WebDriverException)
 import openpyxl as xl
-import json
 import configparser
 import time
-
 import logging
 
 from base_web_bot import BaseWebBot
@@ -15,26 +13,20 @@ from soc_base_mixin import SOC_BaseMixin
 
 
 class SOC_Importer(BaseWebBot, SOC_BaseMixin):
-    """
-    Specialized bot for importing SOC (Safety Override Control) overrides from Excel files.
-    """
+    """SOC overrides importer."""
 
     def __init__(self, soc_id=None):
         BaseWebBot.__init__(self)
         SOC_BaseMixin.__init__(self)
         self.load_configuration()
         self.SOC_base_link = self.base_link + r"Soc/EditOverrides/"
-        
-        if soc_id:
-            self.SOC_id = soc_id
-
-    def set_soc_id(self, soc_id: str) -> None:
         self.SOC_id = soc_id
+        self.import_file_name: str = "soc_import_export/overrides.xlsx"
 
     @property
     def base_link(self) -> str:
         return self._base_link
-
+   
     def load_configuration(self) -> None:
         config = configparser.ConfigParser(interpolation=None)
         config.read(self.config_file, encoding="utf8")
@@ -48,255 +40,274 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
 
         self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=20)
-        self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
-
-        logging.info(f"✅ Configuration loaded from {self.config_file}")
 
     def load_overrides_from_export(self) -> None:
+        """Load overrides from Excel file."""
         try:
-            excel_file_path = 'soc_import_export/overrides.xlsx'
-            logging.info(f"📂 Loading overrides from: {excel_file_path}")
-            wb = xl.load_workbook(excel_file_path)
+            wb = xl.load_workbook(self.import_file_name)
             sheet = wb.active
 
-            # Read headers and data
-            headers = [sheet.cell(6, col).value for col in range(1, sheet.max_column + 1) if sheet.cell(6, col).value]
-            logging.info(f"📋 Columns: {', '.join(headers)}")
-
-            # Simple column mapping
-            column_indices = {}
-            for idx, header in enumerate(headers):
-                column_indices[header] = idx
-
-            # Load overrides
             self.list_of_overrides = []
             for row in range(7, sheet.max_row + 1):
-                tag_number = sheet.cell(row, column_indices['TagNumber'] + 1).value if 'TagNumber' in column_indices else None
+                tag_number = sheet.cell(row, 1).value
                 if not tag_number:
                     continue
 
                 override = {
-                    "TagNumber": tag_number,
-                    "Description": sheet.cell(row, column_indices['Description'] + 1).value if 'Description' in column_indices else "",
-                    "OverrideType": sheet.cell(row, column_indices['OverrideType'] + 1).value if 'OverrideType' in column_indices else "",
-                    "OverrideMethod": sheet.cell(row, column_indices['OverrideMethod'] + 1).value if 'OverrideMethod' in column_indices else "",
-                    "Comment": sheet.cell(row, column_indices['Comment'] + 1).value if 'Comment' in column_indices else None,
-                    "AppliedState": sheet.cell(row, column_indices['AppliedState'] + 1).value if 'AppliedState' in column_indices else "",
-                    "AdditionalValueAppliedState": sheet.cell(row, column_indices['AdditionalValueAppliedState'] + 1).value if 'AdditionalValueAppliedState' in column_indices else None,
-                    "RemovedState": sheet.cell(row, column_indices['RemovedState'] + 1).value if 'RemovedState' in column_indices else None,
-                    "AdditionalValueRemovedState": sheet.cell(row, column_indices['AdditionalValueRemovedState'] + 1).value if 'AdditionalValueRemovedState' in column_indices else None
+                    'TagNumber': tag_number,
+                    'Description': sheet.cell(row, 2).value,
+                    'OverrideType': sheet.cell(row, 3).value,
+                    'OverrideMethod': sheet.cell(row, 4).value,
+                    'Comment': sheet.cell(row, 5).value,
+                    'AppliedState': sheet.cell(row, 6).value,
+                    'AdditionalValueAppliedState': sheet.cell(row, 7).value,
+                    'RemovedState': sheet.cell(row, 8).value,
+                    'AdditionalValueRemovedState': sheet.cell(row, 9).value
                 }
-
-                # Convert empty strings to None
-                for field in ['Comment', 'AdditionalValueAppliedState', 'AdditionalValueRemovedState', 'RemovedState']:
-                    if override[field] == "":
-                        override[field] = None
-
+                
                 self.list_of_overrides.append(override)
 
             logging.info(f"✅ Loaded {len(self.list_of_overrides)} overrides")
-
         except Exception as e:
-            logging.error(f"❌ Failed to load overrides: {e}")
-            self.inject_error_message("❌ Failed to load overrides from export file")
-            raise
-
-    # ===== KENDO UI METHODS =====
-
-    def execute_kendo_script(self, script: str, *args):
-        """Helper to execute Kendo scripts with error handling"""
+            msg = f"❌ Failed to load overrides from {self.import_file_name}"
+            logging.error(f"{msg}: {e}")
+            raise RuntimeError(msg)
+ 
+    def get_dropdown_items_count(self, dropdown_id: str) -> int:
+        """Get number of items in a dropdown."""
         try:
-            return self.driver.execute_script(script, *args)
-        except Exception as e:
-            logging.error(f"❌ Kendo script failed: {e}")
+            count = self.driver.execute_script(f"""
+                var dd = $('#{dropdown_id}').data('kendoDropDownList');
+                return dd ? dd.dataItems().length : 0;
+            """)
+            return count
+        except Exception:
+            return 0
+
+    def get_first_dropdown_value(self, dropdown_id: str):
+        """Get the value of the first item in dropdown."""
+        try:
+            value = self.driver.execute_script(f"""
+                var dd = $('#{dropdown_id}').data('kendoDropDownList');
+                if (dd && dd.dataItems().length > 0) {{
+                    var item = dd.dataItems()[0];
+                    return item.Value || item.Id;
+                }}
+                return null;
+            """)
+            return value
+        except Exception:
             return None
 
-    def get_kendo_dropdown_data(self, element_id: str) -> list[dict]:
-        result = self.execute_kendo_script("""
-            var dropdown = $('#%s').data('kendoDropDownList');
-            return dropdown ? JSON.stringify(dropdown.dataItems()) : null;
-        """ % element_id)
-        return json.loads(result) if result else []
-
-    def set_kendo_dropdown_value(self, element_id: str, value: str) -> bool:
-        result = self.execute_kendo_script("""
-            var dropdown = $('#%s').data('kendoDropDownList');
-            if (dropdown) {
-                dropdown.value(arguments[0]);
-                dropdown.trigger('change');
-                return true;
-            }
-            return false;
-        """ % element_id, value)
-        
-        if result:
-            WebDriverWait(self.driver, 5).until(
-                lambda _: self.execute_kendo_script(
-                    "return $('#%s').data('kendoDropDownList').value() === arguments[0];" % element_id, value
-                )
-            )
-            logging.info(f"✅ {element_id} set to: {value}")
-        return bool(result)
-
-    def wait_for_kendo_dropdown_data(self, element_id: str, timeout: int = 10) -> bool:
+    def auto_select_first_options(self) -> None:
+        """Fixed auto-select based on successful cascade sequence."""
         try:
-            WebDriverWait(self.driver, timeout).until(
-                lambda _: self.execute_kendo_script(
-                    "var d = $('#%s').data('kendoDropDownList'); return d && d.dataItems().length > 0;" % element_id
-                )
-            )
+            # Step 1: First ensure Method dropdown has items
+            method_count = self.get_dropdown_items_count("OverrideMethodId")
+            if method_count == 0:
+                logging.warning("⚠️ Method dropdown empty - may need Type cascade first")
+                return
+
+            # Step 2: Get and select first method value
+            method_value = self.get_first_dropdown_value("OverrideMethodId")
+            if method_value:
+                # Trigger Method → States cascade
+                self.cascade_dropdown("OverrideMethodId", method_value)
+                
+                # Wait for states to populate
+                time.sleep(2)
+                
+                # Step 3: Now select first states
+                self.driver.execute_script("""
+                    // Select first Applied State
+                    var ddApplied = $('#OverrideAppliedStateId').data('kendoDropDownList');
+                    if (ddApplied && ddApplied.dataItems().length > 0) {
+                        var appliedItem = ddApplied.dataItems()[0];
+                        ddApplied.value(appliedItem.Value || appliedItem.Id);
+                        console.log('✅ Selected applied state:', appliedItem.Text);
+                    }
+                    
+                    // Select first Removed State  
+                    var ddRemoved = $('#OverrideRemovedStateId').data('kendoDropDownList');
+                    if (ddRemoved && ddRemoved.dataItems().length > 0) {
+                        var removedItem = ddRemoved.dataItems()[0];
+                        ddRemoved.value(removedItem.Value || removedItem.Id);
+                        console.log('✅ Selected removed state:', removedItem.Text);
+                    }
+                """)
+                
+                # Log results
+                applied_count = self.get_dropdown_items_count("OverrideAppliedStateId")
+                removed_count = self.get_dropdown_items_count("OverrideRemovedStateId")
+                logging.info(f"✅ Auto-selected: {applied_count} applied, {removed_count} removed states")
+                
+        except Exception as e:
+            logging.error(f"❌ Fixed auto-select failed: {e}")
+
+    def cascade_dropdown(self, source_id: str, target_value: int) -> bool:
+        """Fixed cascade dropdown function based on successful JS test."""
+        try:
+            self.driver.execute_script(f"""
+                var source = $('#{source_id}').data('kendoDropDownList');
+                var element = $('#{source_id}')[0];
+                
+                if (source && element) {{
+                    var events = $._data(element, 'events');
+                    if (events && events.change && events.change[0]) {{
+                        var handler = events.change[0].handler;
+                        source.value({target_value});
+                        
+                        var event = $.Event('change');
+                        Object.assign(event, {{
+                            target: element,
+                            currentTarget: element,
+                            sender: source,
+                            value: {target_value}
+                        }});
+                        
+                        handler.call(element, event);
+                        return true;
+                    }}
+                }}
+                return false;
+            """)
+            time.sleep(2)  # Wait for cascade to complete
             return True
-        except TimeoutException:
-            logging.error(f"❌ {element_id} has no data within {timeout}s")
+        except Exception as e:
+            logging.error(f"❌ Cascade failed for {source_id}: {e}")
             return False
 
-    def select_kendo_dropdown_by_text(self, element_id: str, text: str) -> bool:
-        if not self.wait_for_kendo_dropdown_data(element_id):
-            return False
-
-        dropdown_data = self.get_kendo_dropdown_data(element_id)
-        for item in dropdown_data:
-            if any(item.get(field) == text for field in ['Title', 'Text', 'ShortForm']):
-                value = item.get('Value') or item.get('Text') or item.get('Title')
-                return self.set_kendo_dropdown_value(element_id, value)
-
-        logging.error(f"❌ '{text}' not found in {element_id}")
-        return False
-
-    def trigger_dependent_dropdowns(self) -> bool:
-        """Trigger updates for dependent dropdowns"""
-        result = self.execute_kendo_script("""
-            var d = $('#OverrideTypeId').data('kendoDropDownList');
-            if (d) {
-                d.trigger('change');
-                $('#OverrideTypeId').change();
-                return true;
-            }
-            return false;
-        """)
-        time.sleep(1)  # Brief pause for events to process
-        return bool(result)
-
-    def wait_for_dependent_dropdowns(self, timeout: int = 15) -> bool:
-        self.trigger_dependent_dropdowns()
-        
-        for dropdown in ["OverrideMethodId", "OverrideAppliedStateId", "OverrideRemovedStateId"]:
-            if not self.wait_for_kendo_dropdown_data(dropdown, timeout):
-                logging.error(f"❌ {dropdown} not populated")
-                return False
-        
-        logging.info("✅ All dependent dropdowns ready")
-        return True
-
-    # ===== NAVIGATION =====
-
-    def navigate_to_edit_overrides(self):
-        self.driver.get(self.SOC_base_link + self.SOC_id)
-        logging.info(f"👆 Navigated to Edit Overrides for SOC {self.SOC_id}")
-
-    # ===== OVERRIDE PROCESSING =====
-
-    def clear_form_fields(self):
-        """Clear all form fields"""
-        fields = ["TagNumber", "Description", "Comment", "AdditionalValueAppliedState", "AdditionalValueRemovedState"]
-        for field in fields:
-            try:
-                self.driver.find_element(By.ID, field).clear()
-            except:
-                pass  # Ignore if field doesn't exist or can't be cleared
-
-    def add_override(self, override: dict[str, str]) -> None:
+    def add_override(self, override: dict):
+        """Fixed override addition with proper cascade sequence."""
         try:
-            self.clear_form_fields()
-
-            # Set basic fields
-            self.driver.find_element(By.ID, "TagNumber").send_keys(override["TagNumber"])
-            self.driver.find_element(By.ID, "Description").send_keys(override["Description"])
-
-            # Set override type and wait for dependencies
-            if not self.select_kendo_dropdown_by_text("OverrideTypeId", override["OverrideType"]):
-                raise Exception(f"Failed to set OverrideType: {override['OverrideType']}")
-
-            if not self.wait_for_dependent_dropdowns():
-                raise Exception("Dependent dropdowns failed to populate")
-
-            # Set dependent fields
-            if not self.select_kendo_dropdown_by_text("OverrideMethodId", override["OverrideMethod"]):
-                raise Exception(f"Failed to set OverrideMethod: {override['OverrideMethod']}")
-
+            # Fill basic fields first
+            self.fill_text_field("TagNumber", override["TagNumber"])
+            self.fill_text_field("Description", override["Description"])
+            
+            # Step 1: Set Override Type (triggers Type → Method cascade)
+            if override["OverrideType"]:
+                type_value = self.map_override_type_to_value(override["OverrideType"])
+                logging.info(f"🔄 Setting type {type_value} for {override['TagNumber']}")
+                self.cascade_dropdown("OverrideTypeId", type_value)
+                
+                # Wait for Method dropdown to populate
+                time.sleep(2)
+            
+            # Step 2: Auto-select Method and States (triggers Method → States cascade)
+            self.auto_select_first_options()
+                
+            # Fill optional fields
             if override["Comment"]:
-                self.driver.find_element(By.ID, "Comment").send_keys(override["Comment"])
-
-            if not self.select_kendo_dropdown_by_text("OverrideAppliedStateId", override["AppliedState"]):
-                raise Exception(f"Failed to set AppliedState: {override['AppliedState']}")
+                self.fill_text_field("Comment", override["Comment"])
 
             if override["AdditionalValueAppliedState"]:
-                self.driver.find_element(By.ID, "AdditionalValueAppliedState").send_keys(override["AdditionalValueAppliedState"])
-
-            if override["RemovedState"] and not self.select_kendo_dropdown_by_text("OverrideRemovedStateId", override["RemovedState"]):
-                raise Exception(f"Failed to set RemovedState: {override['RemovedState']}")
+                self.fill_text_field("AdditionalValueAppliedState", override["AdditionalValueAppliedState"])
 
             if override["AdditionalValueRemovedState"]:
-                self.driver.find_element(By.ID, "AdditionalValueRemovedState").send_keys(override["AdditionalValueRemovedState"])
+                self.fill_text_field("AdditionalValueRemovedState", override["AdditionalValueRemovedState"])
 
             # Add the override
-            self.driver.find_element(By.ID, "AddOverrideBtn").click()
-            time.sleep(1)  # Wait for form reset
+            self.click_button((By.ID, "AddOverrideBtn"))
+            time.sleep(1)
+            
             logging.info(f"✅ Added: {override['TagNumber']}")
 
+        except (WebDriverException, NoSuchWindowException):
+            logging.warning("🏁 Browser closed during override addition")
+            self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Error adding {override.get('TagNumber', 'Unknown')}: {e}")
-            raise
+            self.process_exception(f"❌ Failed: {override.get('TagNumber', 'Unknown')}", e)
 
+    # Replace the existing methods in your class
     def process_all_overrides(self):
-        logging.info(f"📋 Processing {len(self.list_of_overrides)} overrides")
-        for i, override in enumerate(self.list_of_overrides, 1):
-            logging.info(f"🔄 {i}/{len(self.list_of_overrides)}: {override['TagNumber']}")
-            self.add_override(override)
-        
-        logging.info("✅ All overrides processed")
-        self.wait_for_user_confirmation()
+        """Process all loaded overrides using fixed cascade."""
+        try:
+            total_count = len(self.list_of_overrides)
+            logging.info(f"📋 Processing {total_count} overrides")
+            
+            success_count = 0
+            
+            for override in self.list_of_overrides:                    
+                try:
+                    self.add_override(override)  # Use fixed version
+                    success_count += 1
+                    time.sleep(1)  # Slightly longer delay between overrides
+                except Exception as e:
+                    msg = f"❌ Failed to add override {override.get('TagNumber', 'Unknown')}"
+                    logging.error(f"{msg}: {str(e)}")
+                    self.inject_info_message(msg)
+                    continue            
+            logging.info(f"🎉 Completed: {success_count}/{total_count} successful")
+        except (WebDriverException, NoSuchWindowException):
+            logging.warning("🏁 Browser closed during processing")
+            self.safe_exit()
 
     def wait_for_user_confirmation(self):
-        msg = '⚠️  Скрипт ожидает нажатия кнопки "Подтвердить".'
-        xpath = "//div[@id='bottomWindowButtons']/div"
-        self.inject_info_message(msg, (By.XPATH, xpath), {'color': 'lawngreen'})
-        
+        """Wait for user confirmation with proper connection handling."""
         try:
+            msg = '⚠️  Скрипт ожидает нажатия кнопки "Подтвердить".'
+            xpath = "//div[@id='bottomWindowButtons']/div"
+            self.inject_info_message(msg, (By.XPATH, xpath), {'color': 'lawngreen'})
+            
             WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
                 EC.title_is(self.EXPECTED_HOME_PAGE_TITLE)
             )
             logging.info("🏁 Confirm pressed, home page loaded")
+            return True
         except NoSuchWindowException:
-            logging.info("⚠️ User closed browser")
+            logging.warning("🏁 Browser closed by user during confirmation")
+            self.safe_exit()
+        except Exception as e:           
+            self.process_exception("❌ Failed waiting for confirm", e)
+
+    def navigate_to_edit_overrides(self) -> None:
+        """Navigate to SOC Edit Overrides page."""
+        try:
+            url = self.SOC_base_link + (self.SOC_id or "")
+            self.driver.get(url)
+            
+            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
+                EC.presence_of_element_located((By.ID, "OverrideTypeId"))
+            )
+            time.sleep(1)
+        except TimeoutException as e:
+            self.process_exception("❌ Page load timeout", e)
+        except (WebDriverException, NoSuchWindowException):
+            logging.warning("🏁 Browser closed during navigation")
             self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Failed waiting for confirm: {e}")
+            self.process_exception("❌ Failure while navigating to edit overrides page", e)
 
-    # ===== MAIN WORKFLOW =====
+    def fill_text_field(self, field_id: str, value: str) -> None:
+        """Fill text field with value."""           
+        try:
+            element = self.driver.find_element(By.ID, field_id)
+            element.clear()
+            element.send_keys(str(value))
+        except Exception as e:
+            self.process_exception(f"⚠️ Could not fill {field_id}", e)
+
+    def map_override_type_to_value(self, override_type_text: str) -> int:
+        """Map override type text to numeric value."""
+        mapping = {"байпас": 1, "блокировка": 2, "форсировка": 3, "логики": 4, "сигнализации": 5}
+        text_lower = str(override_type_text).lower()
+        return next((v for k, v in mapping.items() if k in text_lower), 1)            
 
     def run(self, standalone=False):
-        try:
-            logging.info("🚀 Starting SOC_Importer")
+        """Main execution workflow."""
+        if standalone:
+            self.navigate_to_base()
+            self.enter_credentials_and_prepare_soc_input()
+            self.wait_for_soc_input_and_submit()
 
-            if standalone:
-                self.navigate_to_base()
-                self.enter_credentials_and_prepare_soc_input()
-                self.wait_for_soc_input_and_submit()
-
-            self.load_overrides_from_export()
-            self.navigate_to_edit_overrides()
-            self.SOC_locked_check()
-            self.access_denied_check()
-            self.process_all_overrides()
-
-            logging.info("🏁 SOC_Importer completed")
-        except Exception as e:
-            logging.error(f"❌ SOC_Importer failed: {e}")
-            self.inject_error_message(f"Automation failed: {e}")
-        finally:
-            self.driver.quit()
-
+        self.load_overrides_from_export()            
+        self.navigate_to_edit_overrides()
+            
+        self.SOC_locked_check()
+        self.access_denied_check()
+        
+        self.process_all_overrides()
+        self.wait_for_user_confirmation()
 
 if __name__ == "__main__":
     auto_soc = SOC_Importer()

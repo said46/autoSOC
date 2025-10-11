@@ -114,9 +114,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             logging.info(f"👆 SOC {self.SOC_id} status: '{status}'")
             return status.lower()
         except Exception as e:
-            logging.error(f"❌ Failed to get SOC status: {e}")
-            self.inject_error_message(f"❌ Failed to get SOC status: {e}")
-            return ''
+            self.process_exception("❌ Failed to get SOC status", e)
 
     def get_current_role(self) -> str:
         try:
@@ -168,8 +166,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             logging.warning("🏁 Browser closed")
             self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Failed to switch role: {e}")
-            self.inject_error_message("❌ Failed to switch role")
+            self.process_exception("❌ Failed to switch role", e)
 
     def accept_SOC_to_apply(self) -> None:
         try:
@@ -212,8 +209,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             logging.warning("🏁 Browser closed")
             self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Failed to accept SOC: {e}")
-            self.inject_error_message(f"❌ Failed to accept SOC {self.SOC_id}")
+            self.process_exception(f"❌ Failed to accept SOC {self.SOC_id}", e)
 
     def update_points(self):
         try:
@@ -228,8 +224,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
                     selected_text = drop.first_selected_option.text
                     logging.info(f"✅ Point {point_index} updated to {selected_text}")
         except NoSuchElementException as e:
-            logging.error(f"❌ Failed to update points: {e}")
-            self.inject_error_message("❌ Failed to update some points")
+            self.process_exception("❌ Failed to update some points", e)
 
     def navigate_to_soc_and_check_status(self):
         SOC_view_base_link = self._base_link + r"Soc/Details/"
@@ -285,8 +280,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             logging.error("⚠️ User closed browser")
             self.safe_exit()
         except Exception as e:
-            logging.error(f"❌ Failed waiting for confirm: {e}")
-            self.inject_error_message("❌ Failed waiting for confirm")
+            self.process_exception("❌ Failed waiting for confirm", e)
 
     def run(self, standalone=False):
         if standalone:
