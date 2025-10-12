@@ -1,6 +1,6 @@
 # soc_exporter.py
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import (NoSuchElementException, TimeoutException)
+from selenium.common.exceptions import (NoSuchElementException, TimeoutException, NoSuchWindowException, WebDriverException)
 from selenium.webdriver.support.wait import WebDriverWait
 import logging
 import configparser
@@ -8,9 +8,9 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 from datetime import datetime
 
-from base_web_bot import BaseWebBot
+from base_web_bot import BaseWebBot, ErrorLevel
 from soc_base_mixin import SOC_BaseMixin
-
+from error_types import ErrorLevel, OperationResult
 
 class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     """
@@ -18,37 +18,99 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     Exports data in the same format expected by the SOC_Importer.
     """
 
+    # =========================================================================
+    # INITIALIZATION AND CONFIGURATION
+    # =========================================================================
+
     def __init__(self, soc_id=None):
         BaseWebBot.__init__(self)
         SOC_BaseMixin.__init__(self)
-        self.load_configuration()
+        self._initialized = False
+        
+        # Load configuration - critical for operation
+        success, error_msg, severity = self.load_configuration()
+        if not success:
+            logging.error(f"❌ Exporter initialization failed: {error_msg}")
+            # Can't use inject_error_message here - browser not ready yet
+            print(f"❌ FATAL: {error_msg}")
+            raise RuntimeError(f"Exporter initialization failed: {error_msg}")
+            
         self.SOC_ID_PATTERN = r"^\d{7,8}$"
-        self.SOC_id = soc_id if soc_id else None
+        if soc_id:
+            self.SOC_id = soc_id
+            
+        self._initialized = True
 
-    def set_soc_id(self, soc_id: str) -> None:
-        self.SOC_id = soc_id
+    def load_configuration(self) -> OperationResult:
+        """Returns (success, error_message, severity)"""
+        try:
+            config = configparser.ConfigParser(interpolation=None)
+            config.read(self.config_file, encoding="utf8")
+
+            self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
+            raw_password = config.get('Settings', 'password', fallback='******')
+            self.password = self.process_password(raw_password)
+
+            if '\n' in self.password:
+                self.password = 'INCORRECT PASSWORD'
+
+            self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
+            self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=20)
+            self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
+
+            logging.info(f"✅ Configuration loaded from {self.config_file}")
+            return True, None, ErrorLevel.RECOVERABLE
+
+        except Exception as e:
+            return False, f"Configuration failed: {e}", ErrorLevel.FATAL
+
+    # =========================================================================
+    # PROPERTIES AND SETTERS
+    # =========================================================================
 
     @property
     def base_link(self) -> str:
         return self._base_link
 
-    def load_configuration(self) -> None:
-        config = configparser.ConfigParser(interpolation=None)
-        config.read(self.config_file, encoding="utf8")
+    def set_soc_id(self, soc_id: str) -> None:
+        self.SOC_id = soc_id
 
-        self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
-        raw_password = config.get('Settings', 'password', fallback='******')
-        self.password = self.process_password(raw_password)
+    # =========================================================================
+    # NAVIGATION METHODS
+    # =========================================================================
 
-        if '\n' in self.password:
-            self.password = 'INCORRECT PASSWORD'
+    def navigate_to_soc_details(self) -> OperationResult:
+        """Returns (success, error_message, severity)"""
+        try:
+            soc_details_url = self.base_link + f"Soc/Details/{self.SOC_id}"
+            logging.info(f"🌐 Navigating to: {soc_details_url}")
 
-        self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
-        self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=20)
+            self.driver.get(soc_details_url)
 
-        logging.info(f"✅ Configuration loaded from {self.config_file}")
+            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
 
-    def check_if_overrides_exist(self) -> bool:
+            self.error_404_not_present_check()
+            self.url_contains_SOC_Details_check()
+
+            logging.info("✅ Successfully navigated to SOC Details")
+            return True, None, ErrorLevel.RECOVERABLE
+        except (WebDriverException, NoSuchWindowException):
+            error_msg = "Browser closed during navigation"
+            logging.warning(error_msg)
+            return False, error_msg, ErrorLevel.TERMINAL
+        except Exception as e:
+            error_msg = f"Navigation failed: {e}"
+            logging.error(error_msg)
+            return False, error_msg, ErrorLevel.FATAL
+
+    # =========================================================================
+    # DATA EXTRACTION METHODS
+    # =========================================================================
+
+    def check_if_overrides_exist(self) -> OperationResult:
+        """Returns (success, error_message, severity)"""
         try:
             overrides_section = self.driver.find_element(By.XPATH, "//label[contains(text(), 'Отчет по форсировкам')]")
             parent_panel = overrides_section.find_element(By.XPATH, "./ancestor::div[contains(@class, 'issow-panel')]")
@@ -56,19 +118,20 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             no_data_elements = parent_panel.find_elements(By.XPATH, ".//*[contains(text(), 'Нет данных') or contains(text(), 'No data')]")
             if no_data_elements:
                 logging.info("ℹ️ No overrides data found")
-                return False
-            return True
+                return True, "No overrides data found", ErrorLevel.RECOVERABLE
+            return True, None, ErrorLevel.RECOVERABLE
 
         except NoSuchElementException:
             logging.warning("⚠️ Overrides section not found")
-            return False
+            return False, "Overrides section not found", ErrorLevel.RECOVERABLE
         except Exception as e:
             logging.error(f"❌ Error checking overrides: {e}")
-            return False
+            return False, f"Error checking overrides: {e}", ErrorLevel.RECOVERABLE
 
-    def extract_overrides_table_data(self):
+    def extract_overrides_table_data(self) -> tuple[bool, list | None, list | None, str | None, ErrorLevel]:
         """
         Extract SOC overrides data matching the importer's expected format.
+        Returns (success, headers, rows, error_message, severity)
         
         Expected column order for importer:
         TagNumber, Description, OverrideType, OverrideMethod, Comment, 
@@ -77,8 +140,9 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
         try:
             logging.info("🔍 Extracting SOC overrides data...")
 
-            if not self.check_if_overrides_exist():
-                return [], []
+            success, error_msg, severity = self.check_if_overrides_exist()
+            if not success:
+                return False, [], [], error_msg, severity
 
             # Wait for Kendo framework and grid data
             WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
@@ -122,7 +186,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
             result = self.driver.execute_script(script)
             if not result:
-                return [], []
+                return True, [], [], "No data found in grid", ErrorLevel.RECOVERABLE
 
             headers = result.get('headers', [])
             rows = result.get('rows', [])
@@ -130,38 +194,49 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             if headers and rows:
                 logging.info(f"✅ Extracted {len(rows)} overrides with {len(headers)} columns")
                 logging.info(f"📊 Columns: {', '.join(headers)}")
-                return headers, rows
+                return True, headers, rows, None, ErrorLevel.RECOVERABLE
 
-            return [], []
+            return True, [], [], "No data extracted", ErrorLevel.RECOVERABLE
 
         except TimeoutException:
-            logging.warning("⚠️ Timeout waiting for data")
-            return [], []
+            error_msg = "Timeout waiting for data"
+            logging.warning(f"⚠️ {error_msg}")
+            return False, [], [], error_msg, ErrorLevel.RECOVERABLE
         except Exception as e:
-            logging.error(f"❌ Failed to extract data: {e}")
-            return [], []
+            error_msg = f"Failed to extract data: {e}"
+            logging.error(f"❌ {error_msg}")
+            return False, [], [], error_msg, ErrorLevel.FATAL
 
-    def navigate_to_soc_details(self) -> None:
+    # =========================================================================
+    # EXCEL EXPORT METHODS
+    # =========================================================================
+
+    def _auto_adjust_column_widths(self, sheet, headers: list, rows: list) -> None:
+        """
+        Auto-adjust column widths for better readability.
+        """
         try:
-            soc_details_url = self.base_link + f"Soc/Details/{self.SOC_id}"
-            logging.info(f"🌐 Navigating to: {soc_details_url}")
+            max_lengths = [len(str(header)) for header in headers]
 
-            self.driver.get(soc_details_url)
+            for row in rows:
+                for col_index, cell_value in enumerate(row):
+                    if col_index < len(max_lengths):
+                        cell_length = len(str(cell_value))
+                        if cell_length > max_lengths[col_index]:
+                            max_lengths[col_index] = cell_length
 
-            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-                lambda driver: driver.execute_script("return document.readyState") == "complete"
-            )
+            for col_index, max_len in enumerate(max_lengths, 1):
+                adjusted_width = min(max_len + 2, 50)
+                column_letter = get_column_letter(col_index)
+                sheet.column_dimensions[column_letter].width = adjusted_width
 
-            self.error_404_not_present_check()
-            self.url_contains_SOC_Details_check()
-
-            logging.info("✅ Successfully navigated to SOC Details")
         except Exception as e:
-            self.process_exception("❌ Navigation failed", e)
+            logging.warning(f"⚠️ Could not adjust column widths: {e}")
 
-    def create_excel_file(self, headers: list, rows: list, filename: str = None) -> bool:
+    def create_excel_file(self, headers: list, rows: list, filename: str = None) -> OperationResult:
         """
         Create Excel file with fixed column order matching the importer's expectations.
+        Returns (success, error_message, severity)
         
         File structure:
         - Rows 1-4: Metadata
@@ -169,13 +244,13 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
         - Rows 7+: Data rows
         """
         if not headers or not rows:
-            logging.error("❌ No data to export")
-            return False
+            error_msg = "No data to export"
+            logging.error(f"❌ {error_msg}")
+            return False, error_msg, ErrorLevel.RECOVERABLE
 
         try:
             # Use fixed filename for importer compatibility
             if filename is None:
-                #filename = f"soc_import_export/overrides.xlsx"
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"soc_import_export/SOC_{self.SOC_id}_overrides_{timestamp}.xlsx"                
 
@@ -215,84 +290,106 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             workbook.save(filename)
             logging.info(f"💾 Saved to: {filename}")
             logging.info(f"📁 File ready for import with {len(rows)} overrides")
-            return True
+            return True, None, ErrorLevel.RECOVERABLE
 
         except Exception as e:
-            logging.error(f"❌ Failed to create Excel: {e}")
-            return False
+            error_msg = f"Failed to create Excel: {e}"
+            logging.error(f"❌ {error_msg}")
+            return False, error_msg, ErrorLevel.FATAL
 
-    def _auto_adjust_column_widths(self, sheet, headers: list, rows: list) -> None:
-        """
-        Auto-adjust column widths for better readability.
-        """
-        try:
-            max_lengths = [len(str(header)) for header in headers]
-
-            for row in rows:
-                for col_index, cell_value in enumerate(row):
-                    if col_index < len(max_lengths):
-                        cell_length = len(str(cell_value))
-                        if cell_length > max_lengths[col_index]:
-                            max_lengths[col_index] = cell_length
-
-            for col_index, max_len in enumerate(max_lengths, 1):
-                adjusted_width = min(max_len + 2, 50)
-                column_letter = get_column_letter(col_index)
-                sheet.column_dimensions[column_letter].width = adjusted_width
-
-        except Exception as e:
-            logging.warning(f"⚠️ Could not adjust column widths: {e}")
-
-    def extract_and_export_overrides(self) -> None:
+    def extract_and_export_overrides(self) -> OperationResult:
         """
         Extract overrides and export to Excel in importer-compatible format.
+        Returns (success, error_message, severity)
         """
         try:
-            headers, rows = self.extract_overrides_table_data()
+            success, headers, rows, error_msg, severity = self.extract_overrides_table_data()
+            
+            if not success:
+                return False, error_msg, severity
 
             if not headers or not rows:
                 msg = f"ℹ️ No overrides found for SOC {self.SOC_id}"
                 logging.info(msg)
                 self._inject_message_with_wait(msg, style_addons={'color': 'orange'})
+                return True, msg, ErrorLevel.RECOVERABLE
             else:
-                if self.create_excel_file(headers, rows):
+                success, error_msg, severity = self.create_excel_file(headers, rows)
+                if success:
                     msg = f"✅ SOC {self.SOC_id} overrides exported successfully ({len(rows)} records)"
                     logging.info(msg)
                     self._inject_message_with_wait(msg, style_addons={'color': 'darkorange'})
+                    return True, None, ErrorLevel.RECOVERABLE
                 else:
-                    msg = f"❌ Failed to save Excel for SOC {self.SOC_id}"
+                    msg = f"❌ Failed to save Excel for SOC {self.SOC_id}: {error_msg}"
                     self._inject_message_with_wait(msg, style_addons={'color': 'red'})
+                    return False, msg, severity
 
         except Exception as e:
-            logging.error(f"❌ Export error: {e}")
-            self._inject_message_with_wait(f"❌ Export error: {e}", style_addons={'color': 'red'})
+            error_msg = f"Export error: {e}"
+            logging.error(f"❌ {error_msg}")
+            self._inject_message_with_wait(f"❌ {error_msg}", style_addons={'color': 'red'})
+            return False, error_msg, ErrorLevel.FATAL
+
+    # =========================================================================
+    # ERROR HANDLING AND EXECUTION CONTROL
+    # =========================================================================
+
+    def _handle_result(self, success: bool, error_msg: str | None, severity: ErrorLevel) -> bool:
+        """Handle result and return whether to continue execution"""
+        if not success:
+            if severity == ErrorLevel.TERMINAL:
+                logging.info(f"🏁 Terminal: {error_msg}")
+                self.safe_exit()
+                return False
+            elif severity == ErrorLevel.FATAL:
+                logging.error(f"💥 Fatal: {error_msg}")
+                self.inject_error_message(error_msg)
+                return False
+            else:  # RECOVERABLE
+                logging.warning(f"⚠️ Recoverable: {error_msg}")
+                # Continue execution for recoverable errors
+                return True
+        return True
+
+    # =========================================================================
+    # MAIN EXECUTION WORKFLOW
+    # =========================================================================
 
     def run(self, standalone=False):
         """
         Main execution workflow for SOC export.
         """
-        try:
-            logging.info("🚀 Starting SOC export")
+        if not self._initialized:
+            logging.error("❌ Exporter not properly initialized")
+            return
+            
+        if standalone:
+            self.navigate_to_base()
+            self.enter_credentials_and_prepare_soc_input()
+            success = self.wait_for_soc_input_and_submit()  # Now returns bool
+            if not success:
+                logging.error("❌ SOC input and submission failed")
+                return
 
-            if standalone:
-                self.navigate_to_base()
-                self.enter_credentials_and_prepare_soc_input()
-                self.wait_for_soc_input_and_submit()
+        # Main workflow with proper severity handling
+        success, error_msg, severity = self.navigate_to_soc_details()
+        if not self._handle_result(success, error_msg, severity):
+            return
+            
+        success, error_msg, severity = self.extract_and_export_overrides()
+        if not self._handle_result(success, error_msg, severity):
+            return
 
-            self.navigate_to_soc_details()
-            self.extract_and_export_overrides()
-
-            logging.info("🏁 SOC export completed")
-            self._inject_message_with_wait("🏁 SOC export completed", style_addons={'color': 'blue'})
-
-        except Exception as e:
-            logging.error(f"❌ SOC automation failed: {e}")
-            try:
-                self._inject_message_with_wait(f"❌ SOC automation failed: {e}", style_addons={'color': 'red'})
-            except:
-                self.safe_exit()
+        logging.info("🏁 SOC export completed")
+        self._inject_message_with_wait("🏁 SOC export completed", style_addons={'color': 'blue'})
+        self.safe_exit()
 
 
 if __name__ == "__main__":
-    bot = SOC_Exporter()
-    bot.run(standalone=True)
+    try:
+        bot = SOC_Exporter()
+        bot.run(standalone=True)
+    except Exception as e:
+        print(f"❌ Failed to start exporter: {e}")
+        logging.error(f"❌ Exporter startup failed: {e}")

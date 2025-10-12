@@ -5,7 +5,7 @@ import logging
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import (NoSuchElementException, NoSuchWindowException,
-                                      WebDriverException)
+                                      WebDriverException, InvalidSelectorException)
 from soc_DB import SQLQueryDirect
 
 class SOC_BaseMixin:
@@ -172,28 +172,37 @@ class SOC_BaseMixin:
     def SOC_locked_check(self) -> None:
         """Check if SOC is locked and handle accordingly by showing error message."""
         try:
-            li_locked = self.driver.find_element(By.XPATH, "//li[contains(text(), 'Locked')]")
-            logging.error(f"❌ SOC is locked, the script will be terminated: {li_locked.text}")
-            self.inject_error_message(f"❌ SOC is locked: {li_locked.text},.")
+            locked_xpath = "//div[@class='text-danger validation-summary-valid']//li[contains(., 'заблокирован')]"
+            li_locked = self.driver.find_element(By.XPATH, locked_xpath)
+            error_msg = f"❌ SOC is locked: {li_locked.text}"
+            logging.error(error_msg)
+            self.inject_error_message(error_msg)
         except NoSuchElementException:
             logging.info("✅ Success: SOC is not locked")
 
     def access_denied_check(self) -> None:
         """Check for Access Denied error and handle accordingly."""
+        """REWORK WHEN HAPPENS!!!! see in correct XPATH below"""
         try:
-            access_denied = self.driver.find_element(By.XPATH, "//h1[contains(text(), 'Access Denied')]")
-            logging.error(f"❌ {access_denied.text} - Access denied, probably SOC {self.SOC_id} is archived or in improper state")
-            self.inject_error_message(f"❌ Access denied, probably SOC {self.SOC_id} is archived or in improper state.")
+            access_denied_xpath = "//div[contains(@class, 'panel-line-danger')//li[contains(text(), 'I DON'T KNOW WHAT TO FIND YET')]"
+            self.driver.find_element(By.XPATH, access_denied_xpath)
+            error_msg = f"❌ Access denied, SOC {self.SOC_id} may be archived or in improper state"
+            logging.error(error_msg)
+            self.inject_error_message(error_msg)
         except NoSuchElementException:
             logging.info("✅ Success: no access denied issue")
+        except InvalidSelectorException:
+            logging.warning(f"InvalidSelectorException is TEMPORARY DISABLED IN access_denied_check()")
 
     def login_failed_check(self) -> None:
         """Check for login failure and handle accordingly."""
         try:
-            # Check if li tag with parent div[contains(@class, 'text-danger')] contains any text
-            self.driver.find_element(By.XPATH, "//div[contains(@class, 'text-danger')]//li[text()]")
-            logging.error("❌ Login issue, check the password in ini-file.")
-            self.inject_error_message(f"❌ Login issue, check the password in ini-file.")
+            login_failed_xpath = "//div[contains(@class, 'validation-summary-errors')]"
+            locked_xpath = "//div[@class='text-danger validation-summary-valid']//li[contains(., 'заблокирован')]"
+            self.driver.find_element(By.XPATH, locked_xpath)
+            error_msg = "❌ Login issue, check the password in ini-file."
+            logging.error(error_msg)
+            self.inject_error_message(error_msg)
         except NoSuchElementException:
             logging.info("✅ Success: no login issue")
 
@@ -366,15 +375,12 @@ class SOC_BaseMixin:
 
     # ===== SOC INPUT PROCESSING AND FORM SUBMISSION =====
 
-    def wait_for_soc_input_and_submit(self):
+    def wait_for_soc_input_and_submit(self) -> bool:
         """
         Wait for SOC ID input and submit the form.
-
-        This is the main method that coordinates the SOC input process:
-        1. Waits for valid SOC ID input with Enter key press
-        2. Processes the SOC ID (stripping leading zeros if needed)
-        3. Optionally queries database for full SOC ID if partial provided
-        4. Submits the form with the processed SOC ID
+        
+        Returns:
+            bool: True if successful, False if failed
         """
         try:
             # Wait for valid SOC ID input with timeout
@@ -386,6 +392,7 @@ class SOC_BaseMixin:
             if self._is_browser_closed():
                 logging.info("🏁 Browser closed by user during input")
                 self.safe_exit()
+                return False  # This line won't be reached due to safe_exit(), but for completeness
 
             # Get the SOC_id from the injected input field
             raw_soc_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")
@@ -409,20 +416,29 @@ class SOC_BaseMixin:
                     except Exception as e:
                         logging.error(f"❌ Failed to request DB: {str(e)}")
                         self.inject_error_message(f"❌ Failed to request DB ({str(e)}).")
+                        return False
 
             logging.info(f"✅ Processed SOC id is {self.SOC_id}, continue submitting the form")
-            self.submit_form_with_soc_id()
+            
+            # Submit the form
+            success = self.submit_form_with_soc_id()
+            return success
 
         except (NoSuchWindowException, WebDriverException):
-            logging.warning(f"🏁  Browser windows was closed, end of script")
+            logging.warning(f"🏁 Browser window was closed, end of script")
             self.safe_exit()
+            return False
         except Exception as e:
             logging.error(f"❌ Failed to wait for SOC_id to be entered: {str(e)}")
             self.inject_error_message(f"❌ Failed to wait for SOC_id to be entered.")
+            return False
 
-    def submit_form_with_soc_id(self) -> None:
+    def submit_form_with_soc_id(self) -> bool:
         """
         Submit the form with the self.SOC_id.
+        
+        Returns:
+            bool: True if successful, False if failed
         """
         try:
             # Submit the form directly via JavaScript
@@ -432,9 +448,11 @@ class SOC_BaseMixin:
                 form?.submit()
             """)
             logging.info(f"✅ Form submitted successfully with {self.SOC_id}")
+            return True
         except Exception as e:
             logging.error(f"❌ Failed to submit the form: {str(e)}")
             self.inject_error_message(f"❌ Failed to submit the form.")
+            return False
 
     # ===== DATABASE OPERATIONS =====
 

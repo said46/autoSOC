@@ -5,17 +5,23 @@ import ctypes
 from typing import Union, TypedDict
 from abc import abstractmethod
 
-from selenium.common.exceptions import (NoSuchWindowException, WebDriverException)
+from selenium.common.exceptions import (NoSuchWindowException, WebDriverException, TimeoutException)
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 
 import time
 import sys
+from enum import Enum
 
 import logging
 from logging_setup import logging_setup
 
+
+class ErrorLevel(Enum):
+    RECOVERABLE = 1
+    FATAL = 2
+    TERMINAL = 3
 
 def message_box(title, text, style):
     """Display a Windows message box using ctypes"""
@@ -54,11 +60,18 @@ class BaseWebBot:
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = 20    # Default timeout for page loads
         self.ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
 
-    def process_exception(self, msg: str, e: Exception = None, include_exception_text_to_log = True) -> None:
-        if e and include_exception_text_to_log:
-            logging.error(f"{msg}: {str(e)}")
+    def process_exception(self, msg: str, e: Exception = None, include_e_text_to_log = True, include_e_type_to_log = False) -> None:
+        """NOT USED IN CONTROLLER ANYMORE, LEFT FOR COMPATABILITY WITH EXPORTER/IMPORTER"""
+        """SUBJECT TO CHANGE OR DELETE LATER"""
+        final_msg = msg
+        if e:
+            if include_e_text_to_log:
+                final_msg = final_msg + " " + str(e)
+            if include_e_type_to_log:
+                final_msg = final_msg + f" type of exception: {type(e)}"
         else:
             logging.error(msg)
+        
         self.inject_error_message(msg)
     
     # ===== CORE WEBDRIVER MANAGEMENT =====
@@ -178,38 +191,54 @@ class BaseWebBot:
 
     # ===== ELEMENT INTERACTION METHODS =====
 
-    def click_button(self, locator: tuple[str, str]):
-        """
-        Click on a web element with explicit waiting for it to be clickable.
-
-        Args:
-            locator: Tuple of (By strategy, locator value) e.g., (By.ID, "submit-button")
-
-        Raises:
-            Exception: If element is not found or not clickable within timeout
-        """
+    def click_button(self, locator) -> bool:
+        """Click button with detailed error reporting"""
         try:
-            element = WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
+            element = WebDriverWait(self.driver, 10).until(
                 EC.element_to_be_clickable(locator)
             )
             element.click()
+            logging.info(f"✅ Successfully clicked button: {locator}")
+            return True
+        except TimeoutException:
+            logging.error(f"⏰ Timeout: Button {locator} not clickable after 10 seconds")
+            return False
         except Exception as e:
-            logging.error(f"❌ Failed to click element with locator {locator}: {str(e)}")
-            raise
+            logging.error(f"❌ Error clicking button {locator}: {e}")
+            return False
 
-    def wait_for_kendo_dropdown(self, element_id: str, timeout: int = 10) -> None:
+    def wait_for_kendo_dropdown(self, element_id: str, timeout: int = 10) -> bool:
         """
         Wait for a Kendo UI DropDownList to be fully initialized and ready.
 
         Args:
             element_id: HTML ID of the Kendo dropdown element
             timeout: Maximum time to wait in seconds
+
+        Returns:
+            bool: True if dropdown is ready, False if timeout occurs
         """
-        WebDriverWait(self.driver, timeout).until(
-            lambda _: self.driver.execute_script(
-                f"return typeof jQuery !== 'undefined' && jQuery('#{element_id}').data('kendoDropDownList') !== undefined;"
+        try:
+            WebDriverWait(self.driver, timeout).until(
+                lambda _: self.driver.execute_script(
+                    f"return typeof jQuery !== 'undefined' && jQuery('#{element_id}').data('kendoDropDownList') !== undefined;"
+                )
             )
+            return True
+        except TimeoutException:
+            logging.warning(f"⚠️ Timeout waiting for Kendo dropdown '{element_id}' to initialize")
+            return False
+        except Exception as e:
+            logging.error(f"❌ Error waiting for Kendo dropdown '{element_id}': {e}")
+            return False
+
+    def wait_page_fully_loaded(self):
+        wait_for = "page fully loaded (no jQuery check)"
+        logging.info(f"⌛ Waiting for {wait_for}")
+        WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
+            lambda _: (self.driver.execute_script("return document.readyState") == "complete")
         )
+        logging.info(f"🏁 {wait_for}")
 
     # ===== MESSAGE INJECTION METHODS =====
 
