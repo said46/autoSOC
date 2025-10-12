@@ -2,11 +2,8 @@ auto-py-to-exe.txt
 *.exe
 *.log
 *.spec
+__pycache__/
 build/
 dist/
-__pycache__/
 test.py
-*.xlsx
-*.png
 soc_import_export/
-_old/
