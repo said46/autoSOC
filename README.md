@@ -12,18 +12,16 @@ SOC Launcher - Unified launcher with radio button selection between all modes
 🏗️ Project Structure
 text
 soc-automation/
-├── soc_controller.py      # Main SOC processing bot
-
-├── soc_exporter.py        # SOC data export to Excel
-
-├── soc_importer.py        # SOC data import from Excel
-├── soc_launcher.py        # Unified launcher with mode selection
-├── soc_base_mixin.py      # Shared SOC functionality
-├── base_web_bot.py        # Base web automation class
-├── soc_DB.py             # Database operations
-├── error_types.py         # Error handling definitions
-├── logging_setup.py       # Logging configuration
-└── SOC.ini               # Configuration file
+├── soc_controller.py      # Main SOC processing bot 
+├── soc_exporter.py        # SOC data export to Excel 
+├── soc_importer.py        # SOC data import from Excel 
+├── soc_launcher.py        # Unified launcher with mode selection 
+├── soc_base_mixin.py      # Shared SOC functionality 
+├── base_web_bot.py        # Base web automation class 
+├── soc_DB.py             # Database operations 
+├── error_types.py         # Error handling definitions 
+├── logging_setup.py       # Logging configuration 
+└── SOC.ini               # Configuration file 
 
 🚀 Features
 Core Capabilities
