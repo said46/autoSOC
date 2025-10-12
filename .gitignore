@@ -9,3 +9,4 @@ test.py
 *.xlsx
 *.png
 soc_import_export/
+_old/

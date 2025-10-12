@@ -5,7 +5,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (TimeoutException, NoSuchWindowException, NoSuchElementException, WebDriverException)
 import openpyxl as xl
 import configparser
-import time
 import logging
 
 from base_web_bot import BaseWebBot, ErrorLevel
@@ -61,7 +60,7 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
             self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=20)
             self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
 
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except Exception as e:
             return False, f"Configuration failed: {e}", ErrorLevel.FATAL
@@ -71,18 +70,21 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
     # =========================================================================
 
     def load_override_records(self) -> OperationResult:
-        """Load override records from Excel with proper data mapping. Returns (success, error_message, severity)"""
+        """Load override records from Excel with user-edited Russian text."""
         try:
             wb = xl.load_workbook(self.import_file_name)
             sheet = wb.active
 
             self.override_records = []
-            for row in range(7, sheet.max_row + 1):
+            start_row = 7  # Skip instruction rows
+            
+            for row in range(start_row, sheet.max_row + 1):
                 tag_number = sheet.cell(row, 1).value
                 if not tag_number:
-                    continue
+                    continue  # Skip empty rows
 
                 record = {
+                    # User-edited fields (direct from Excel)
                     'tag_number': str(tag_number).strip(),
                     'description': str(sheet.cell(row, 2).value or '').strip(),
                     'type_text': str(sheet.cell(row, 3).value or '').strip(),
@@ -96,31 +98,52 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
                 
                 self.override_records.append(record)
 
-            logging.info(f"📋 Loaded {len(self.override_records)} override records")
-            return True, None, ErrorLevel.RECOVERABLE
+            logging.info(f"📋 Loaded {len(self.override_records)} user-edited override records")
+            
+            # Validate that mapping will work
+            success, error_msg = self._validate_user_inputs()
+            if not success:
+                return False, error_msg, ErrorLevel.RECOVERABLE
+                
+            return True, None, None
+            
         except Exception as e:
             error_msg = f"Failed to load override records from {self.import_file_name}: {e}"
             logging.error(error_msg)
             return False, error_msg, ErrorLevel.FATAL
 
-    def map_override_type(self, type_text: str) -> int:
-        """Using generator expression for memory efficiency."""
-        if not type_text:
-            return None
+    def _validate_user_inputs(self) -> tuple[bool, str]:
+        """Validate that user-edited Russian text can be properly mapped."""
+        valid_types = ['байпас', 'блокировка', 'форсировка', 'логики', 'сигнализации']
+        
+        for record in self.override_records:
+            type_text = record['type_text'].lower()
             
-        mapping_rules = (
-            ("байпас", 1),
-            ("блокировка", 2),
-            ("форсировка", 3),
-            ("логики", 4),
-            ("сигнализации", 5)
-        )
+            # Check if type text is mappable
+            if type_text and not any(valid_type in type_text for valid_type in valid_types):
+                logging.warning(f"⚠️ Unrecognized override type: '{record['type_text']}'")
+                # Continue anyway - maybe user knows what they're doing
         
-        text_lower = type_text.lower()
-        
-        # Generator expression - stops at first match
-        match = next((value for key, value in mapping_rules if key in text_lower), None)
-        return match
+        return True, None
+
+    def map_override_type(self, type_text: str) -> int:
+            """Using generator expression for memory efficiency."""
+            if not type_text:
+                return None
+                
+            mapping_rules = (
+                ("байпас", 1),
+                ("блокировка", 2),
+                ("форсировка", 3),
+                ("логики", 4),
+                ("сигнализации", 5)
+            )
+            
+            text_lower = type_text.lower()
+            
+            # Generator expression - stops at first match
+            match = next((value for key, value in mapping_rules if key in text_lower), None)
+            return match        
 
     # =========================================================================
     # WEB ELEMENT INTERACTION METHODS
@@ -133,15 +156,15 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
             element.clear()
             element.send_keys(str(value))
             logging.info(f"✅ Text field filled: {field_id} = {value}")
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
         except NoSuchElementException:
             error_msg = f"Text field not found: {field_id}"
             logging.warning(error_msg)
-            return False, error_msg, ErrorLevel.RECOVERABLE
+            return False, error_msg, ErrorLevel.FATAL
         except Exception as e:
             error_msg = f"Failed to fill text field {field_id}: {e}"
             logging.error(error_msg)
-            return False, error_msg, ErrorLevel.RECOVERABLE
+            return False, error_msg, ErrorLevel.FATAL
 
     def wait_for_element_visibility(self, element_id: str, timeout: int = 5) -> bool:
         """Wait for element to become visible."""
@@ -237,10 +260,20 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
                 }}
                 return false;
             """)
-            
+                        
             if success:
-                time.sleep(2)  # Wait for cascade completion
                 logging.info(f"🔄 Cascade triggered: {dropdown_id} → {new_value}")
+            
+            # Wait for common dependent widgets to be ready
+            dependent_widgets = ['OverrideMethodId', 'OverrideAppliedStateId', 'OverrideRemovedStateId']
+            self.wait_for_page_fully_ready(
+                check_dom=False,  # DOM is already ready
+                check_jquery=False,  # jQuery is already loaded
+                check_kendo=False,  # Kendo is already loaded
+                specific_widgets=dependent_widgets,
+                timeout=10  # Shorter timeout for cascade
+            )
+
             return success
             
         except Exception as e:
@@ -274,91 +307,192 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
                 else:
                     logging.warning("⚠️ Removed Additional Value field not visible - may need different state selection")
             
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
             
         except Exception as e:
             error_msg = f"Failed to handle dynamic additional fields: {e}"
             logging.error(error_msg)
-            return False, error_msg, ErrorLevel.RECOVERABLE
+            return False, error_msg, ErrorLevel.FATAL
 
-    def fill_override_form(self, record: dict) -> OperationResult:
-        """Fill the override form with dynamic field visibility handling. Returns (success, error_message, severity)"""
+    def fill_basic_fields(self, record: dict) -> OperationResult:
+        """Fill basic text fields in the override form. Returns (success, error_message, severity)"""
         try:
-            logging.info(f"🔧 Processing: {record['tag_number']}")
+            logging.info(f"📝 Filling basic fields for: {record['tag_number']}")
             
-        # Step 1: Fill basic fields
-            success, error_msg, severity = self.fill_text_field("TagNumber", record['tag_number'])
-            if not success:
-                return False, error_msg, severity
-                
-            success, error_msg, severity = self.fill_text_field("Description", record['description'])
-            if not success:
-                return False, error_msg, severity
+            # Fill Tag Number (required field)
+            if record['tag_number']:
+                success, error_msg, severity = self.fill_text_field("TagNumber", record['tag_number'])
+                if not success:
+                    return False, error_msg, severity
             
-            # Track which additional fields should be visible
-            additional_fields_expected = {
-                'applied': bool(record['applied_additional_value']),
-                'removed': bool(record['removed_additional_value'])
-            }
+            # Fill Description (optional field)
+            if record['description']:
+                success, error_msg, severity = self.fill_text_field("Description", record['description'])
+                if not success:
+                    return False, error_msg, severity
             
-            # Step 2: Handle Type → Method cascade
-            if record['type_text']:
-                type_value = self.map_override_type(record['type_text'])
-                if type_value and self.trigger_cascade_change("OverrideTypeId", type_value):
-                    time.sleep(1)  # Wait for Method dropdown
-                    
-                    # Step 3: Select specific Method
-                    if record['method_text']:
-                        method_item = self.find_dropdown_item_by_text("OverrideMethodId", record['method_text'])
-                        if method_item and self.trigger_cascade_change("OverrideMethodId", method_item['value']):
-                            time.sleep(1)  # Wait for States
-                            
-                            # Step 4: MANUALLY select Applied State
-                            if record['applied_state_text']:
-                                applied_item = self.find_dropdown_item_by_text("OverrideAppliedStateId", record['applied_state_text'])
-                                if applied_item:
-                                    self.set_dropdown_value("OverrideAppliedStateId", applied_item['value'])
-                                    self.trigger_cascade_change("OverrideAppliedStateId", applied_item['value'])
-                                    
-                                    # Wait for potential UI changes (additional fields visibility)
-                                    time.sleep(1)
-                                    
-                                    # Step 5: Handle Removed State selection
-                                    removed_data = self.get_dropdown_data("OverrideRemovedStateId")
-                                    if (removed_data.get('item_count', 0) > 0 and 
-                                        not removed_data.get('selected_value')):
-                                        if record['removed_state_text']:
-                                            removed_item = self.find_dropdown_item_by_text("OverrideRemovedStateId", record['removed_state_text'])
-                                            if removed_item:
-                                                self.set_dropdown_value("OverrideRemovedStateId", removed_item['value'])
-                                    else:
-                                        logging.info(f"✅ Removed State auto-selected: {removed_data.get('selected_text')}")
-            
-            # Step 6: Fill optional fields with visibility awareness
+            # Fill Comment (optional field)
             if record['comment']:
                 success, error_msg, severity = self.fill_text_field("Comment", record['comment'])
                 if not success:
                     return False, error_msg, severity
-                
-            # Handle dynamic additional value fields
-            self.handle_dynamic_additional_fields(record)
             
-            return True, None, ErrorLevel.RECOVERABLE
+            logging.info(f"✅ Basic fields filled for: {record['tag_number']}")
+            return True, None, None
+            
+        except Exception as e:
+            error_msg = f"Failed to fill basic fields for {record['tag_number']}: {e}"
+            logging.error(error_msg)
+            return False, error_msg, ErrorLevel.FATAL    
+
+    def fill_optional_fields(self, record: dict) -> OperationResult:
+        """Fill optional fields in the override form. Returns (success, error_message, severity)"""
+        try:
+            # Fill Removed State if provided
+            if record['removed_state_text']:
+                removed_item = self.find_dropdown_item_by_text("OverrideRemovedStateId", record['removed_state_text'])
+                if removed_item:
+                    if not self.set_dropdown_value("OverrideRemovedStateId", removed_item['value']):
+                        logging.warning(f"⚠️ Failed to set Removed State for {record['tag_number']}")
+                else:
+                    logging.warning(f"⚠️ Removed state not found: {record['removed_state_text']}")
+            
+            logging.info(f"✅ Optional fields processed for: {record['tag_number']}")
+            return True, None, None
+            
+        except Exception as e:
+            error_msg = f"Failed to fill optional fields for {record['tag_number']}: {e}"
+            logging.error(error_msg)
+            return False, error_msg, ErrorLevel.FATAL            
+    
+    def fill_override_form(self, record: dict) -> OperationResult:
+        """Fill the override form with dynamic field visibility handling."""
+        try:
+            logging.info(f"🔧 Processing: {record['tag_number']}")
+            
+            # Step 1: Fill basic fields
+            success, error_msg, severity = self.fill_basic_fields(record)
+            if not success:
+                return False, error_msg, severity
+            
+            # Step 2-4: Handle cascading dropdowns
+            success, error_msg, severity = self.handle_cascading_dropdowns(record)
+            if not success:
+                return False, error_msg, severity
+            
+            # Step 5: Fill optional fields
+            success, error_msg, severity = self.fill_optional_fields(record)
+            if not success:
+                return False, error_msg, severity
+                
+            # Step 6: Handle dynamic additional fields
+            success, error_msg, severity = self.handle_dynamic_additional_fields(record)
+            if not success:
+                return False, error_msg, severity
+            
+            return True, None, None
             
         except Exception as e:
             error_msg = f"Form fill failed for {record['tag_number']}: {e}"
             logging.error(error_msg)
-            return False, error_msg, ErrorLevel.RECOVERABLE
+            return False, error_msg, ErrorLevel.FATAL
+
+    def handle_cascading_dropdowns(self, record: dict) -> OperationResult:
+        """Handle the Type → Method → Applied State cascade."""
+        
+        # Step 2: Handle Type → Method cascade
+        if record['type_text']:
+            success, error_msg, severity = self.process_type_method_cascade(record)
+            if not success:
+                return False, error_msg, severity
+        
+        # Step 4: Handle Applied State selection
+        if record['applied_state_text']:
+            success, error_msg, severity = self.process_applied_state(record)
+            if not success:
+                return False, error_msg, severity
+        
+        return True, None, None
+
+    def process_type_method_cascade(self, record: dict) -> OperationResult:
+        """Process Type → Method cascade with smart waiting."""
+        type_value = self.map_override_type(record['type_text'])
+        if not type_value:
+            return True, None, None  # No type mapping found is acceptable
+        
+        if not self.trigger_cascade_change("OverrideTypeId", type_value):
+            return False, "Failed to trigger Type cascade", ErrorLevel.FATAL
+        
+        # Only wait if we actually need to select a method
+        if record['method_text']:
+            # Wait for Method dropdown specifically since we need to use it
+            success = self.wait_for_page_fully_ready(
+                check_dom=False,
+                check_jquery=False,
+                check_kendo=False,
+                specific_widgets=['OverrideMethodId'],
+                timeout=10
+            )
+            
+            if not success:
+                logging.warning("⚠️ Method dropdown not ready, but continuing...")
+        
+        # Step 3: Select specific Method (if needed)
+        if record['method_text']:
+            return self.process_method_selection(record)
+        
+        return True, None, None
+
+    def process_method_selection(self, record: dict) -> OperationResult:
+        """Process method selection and trigger cascade."""
+        method_item = self.find_dropdown_item_by_text("OverrideMethodId", record['method_text'])
+        if not method_item:
+            return False, f"Method not found: {record['method_text']}", ErrorLevel.FATAL
+        
+        if not self.trigger_cascade_change("OverrideMethodId", method_item['value']):
+            return False, "Failed to trigger Method cascade", ErrorLevel.FATAL
+        
+        # Wait for dependent state widgets to update instead of sleeping
+        dependent_widgets = ['OverrideAppliedStateId', 'OverrideRemovedStateId']
+        success = self.wait_for_page_fully_ready(
+            check_dom=False,  # DOM is already ready
+            check_jquery=False,  # jQuery is already loaded
+            check_kendo=False,  # Kendo is already loaded
+            specific_widgets=dependent_widgets,
+            timeout=10  # Shorter timeout for cascade
+        )
+        
+        if not success:
+            logging.warning("⚠️ State widgets not fully ready after method cascade (may be normal for some methods)")
+        
+        return True, None, None
+
+    def process_applied_state(self, record: dict) -> OperationResult:
+        """Process applied state selection."""
+        applied_item = self.find_dropdown_item_by_text("OverrideAppliedStateId", record['applied_state_text'])
+        if not applied_item:
+            return False, f"Applied state not found: {record['applied_state_text']}", ErrorLevel.FATAL
+        
+        if not self.set_dropdown_value("OverrideAppliedStateId", applied_item['value']):
+            return False, "Failed to set Applied State", ErrorLevel.FATAL
+        
+        if not self.trigger_cascade_change("OverrideAppliedStateId", applied_item['value']):
+            return False, "Failed to trigger Applied State cascade", ErrorLevel.FATAL
+        
+        return True, None, None
 
     def submit_override(self, record: dict) -> OperationResult:
         """Submit the completed override form. Returns (success, error_message, severity)"""
-        try:
-            self.click_button((By.ID, "AddOverrideBtn"))
-            return True, None, ErrorLevel.RECOVERABLE
+        try:           
+            if not self.click_button((By.ID, "AddOverrideBtn")):
+                error_msg = "Add Override button not found or not clickable"
+                logging.error(f"❌ {error_msg}")
+                return False, error_msg, ErrorLevel.FATAL            
+            return True, None, None
         except Exception as e:
             error_msg = f"Submit override failed for {record['tag_number']}: {e}"
             logging.error(error_msg)
-            return False, error_msg, ErrorLevel.RECOVERABLE
+            return False, error_msg, ErrorLevel.FATAL
 
     # =========================================================================
     # WORKFLOW EXECUTION METHODS
@@ -385,12 +519,12 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
                 return False, error_msg, severity
             
             logging.info(f"✅ process_single_override completed successfully for: {record['tag_number']}")
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
             
         except Exception as e:
             error_msg = f"Uncaught exception in process_single_override for {record['tag_number']}: {e}"
             logging.error(error_msg)
-            return False, error_msg, ErrorLevel.RECOVERABLE
+            return False, error_msg, ErrorLevel.FATAL
 
     def execute_import_workflow(self) -> OperationResult:
         """Main import workflow execution. Returns (success, error_message, severity)"""
@@ -412,7 +546,7 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
                     self.inject_info_message(f"Failed: {record['tag_number']}")
             
             logging.info(f"🎉 Import completed: {success_count}/{total_count} successful")
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
             
         except (WebDriverException, NoSuchWindowException):
             error_msg = "Browser closed during import"
@@ -428,38 +562,62 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
     # =========================================================================
 
     def navigate_to_edit_overrides(self) -> OperationResult:
-        """Navigate to SOC Edit Overrides page. Returns (success, error_message, severity)"""
+        """Navigate to SOC Edit Overrides page with complete error handling."""
         try:
             url = self.SOC_base_link + self.SOC_id
+            logging.info(f"🌐 Navigating to: {url}")
+            
             self.driver.get(url)
             
-            self.wait_page_fully_loaded()
-            self.SOC_locked_check()
-            self.access_denied_check()          
+            if not self.wait_for_page_fully_ready():
+                return False, "Edit overrides page failed to load", ErrorLevel.FATAL
+
+            # Security and access checks
+            success, error_msg = self.error_404_not_present_check()
+            if not success:
+                return False, error_msg, ErrorLevel.FATAL
             
-            txt = "waiting for OverrideTypeId to be displayed"
-            logging.info(f"⌛ start {txt}")
-            # Wait for multiple conditions to ensure page is fully loaded
-            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-                lambda driver: (
-                    driver.find_element(By.ID, "OverrideTypeId")
-                )
-            )
-            logging.info("🏁 finish {txt}")
+            success, error_msg = self.SOC_locked_check()
+            if not success:
+                return False, error_msg, ErrorLevel.FATAL
+                       
+            success, error_msg = self.access_denied_check()
+            if not success:
+                return False, error_msg, ErrorLevel.FATAL            
+                        
+            if not self._verify_edit_overrides_page():
+                return False, "Edit overrides page verification failed", ErrorLevel.FATAL
             
-            return True, None, ErrorLevel.RECOVERABLE
+            logging.info("✅ Successfully navigated to SOC Edit Overrides")
+            return True, None, None
             
-        except TimeoutException as e:
-            error_msg = "Page load timeout"
+        except TimeoutException:
+            error_msg = "Timeout waiting for edit overrides page to load"
             logging.error(error_msg)
-            return False, error_msg, ErrorLevel.FATAL
-        except (WebDriverException, NoSuchWindowException) as e:
-            error_msg = "Browser closed during navigation"
+            return False, error_msg, ErrorLevel.FATAL                
+        except (WebDriverException, NoSuchWindowException):
+            error_msg = "Browser closed during navigation to edit overrides"
             logging.warning(error_msg)
             return False, error_msg, ErrorLevel.TERMINAL
         except Exception as e:
             error_msg = f"Navigation to edit overrides failed: {e}"
             logging.error(error_msg)
+            return False, error_msg, ErrorLevel.FATAL
+
+    def _verify_edit_overrides_page(self) -> OperationResult:
+        """Verify we're actually on the Edit Overrides page."""
+        try:
+            current_url = self.driver.current_url
+            if "/Soc/EditOverrides/" not in current_url:
+                error_msg = f"Wrong page loaded: {current_url}"
+                logging.error(f"❌ {error_msg}")
+                return False, error_msg, ErrorLevel.FATAL
+                                           
+            logging.info("✅ Verified Edit Overrides page content")
+            return True, None, None            
+        except Exception as e:
+            error_msg = f"Page verification failed: {e}"
+            logging.error(f"❌ {error_msg}")
             return False, error_msg, ErrorLevel.FATAL
 
     def wait_for_user_confirmation(self) -> OperationResult:
@@ -473,7 +631,7 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
                 EC.title_is(self.EXPECTED_HOME_PAGE_TITLE)
             )
             logging.info("🏁 Confirm pressed, home page loaded")
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
         except NoSuchWindowException:
             error_msg = "Browser closed by user during confirmation"
             logging.warning(error_msg)
@@ -513,10 +671,13 @@ class SOC_Importer(BaseWebBot, SOC_BaseMixin):
         if standalone:
             self.navigate_to_base()
             self.enter_credentials_and_prepare_soc_input()
-            success = self.wait_for_soc_input_and_submit()  # Now returns bool
+            
+            success, error_msg = self.wait_for_soc_input_and_submit()
             if not success:
-                logging.error("❌ SOC input and submission failed")
-                return
+                # this is the way to use with function calls from the mixin
+                # we convert it to our error handling approach
+                if not self._handle_result(False, error_msg, ErrorLevel.FATAL):
+                    return                
 
         # Main workflow with proper severity handling
         success, error_msg, severity = self.load_override_records()

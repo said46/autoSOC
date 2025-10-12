@@ -81,7 +81,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             else:
                 self.SOC_ID_PATTERN = r"^\d{7,8}$"
 
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except Exception as e:
             return False, f"Configuration failed: {e}", ErrorLevel.FATAL
@@ -143,7 +143,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
                 return False, "SOC status cannot be empty", ErrorLevel.FATAL
             logging.info(f"👆 SOC {self.SOC_id} status: '{status}'")
             self.SOC_status = status.lower()
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
         except Exception as e:
             return False, f"Failed to get SOC status: {e}", ErrorLevel.FATAL
 
@@ -156,14 +156,14 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             if "Роль:" in role_text:
                 role_name = role_text.split("Роль:")[1].strip()
                 logging.info(f"👤 Current role: '{role_name}'")
-                return True, self.roles[role_name], ErrorLevel.RECOVERABLE
+                return True, role_name, ErrorLevel.RECOVERABLE
             else:
-                return False, f"Unexpected role format: '{role_text}'", ErrorLevel.RECOVERABLE
+                return False, f"Unexpected role format: '{role_name}'", ErrorLevel.RECOVERABLE
 
         except NoSuchElementException:
             return False, "Role span not found", ErrorLevel.RECOVERABLE
         except Exception as e:
-            return False, f"Could not determine role: {e}", ErrorLevel.RECOVERABLE
+            return False, f"Could not determine role: {str(e)}", ErrorLevel.RECOVERABLE
 
     def switch_role(self, role: str) -> OperationResult:
         """Returns (success, error_message, severity)"""
@@ -175,11 +175,11 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
             if current_role_or_error == role:
                 logging.info(f"✅ Already in {role} role")
-                return True, None, ErrorLevel.RECOVERABLE
+                return True, None, None
 
             # Switch role
             self.driver.get(self._base_link + r"User/ChangeRole")
-            self.wait_for_kendo_dropdown("CurrentRoleName")
+            self.wait_for_page_fully_ready() # probably add CurrentRoleName widget
 
             set_role_script = f"""
                 var dropdown = $('#CurrentRoleName').data('kendoDropDownList');
@@ -197,7 +197,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
             self.click_button((By.ID, 'ConfirmHeader'))
             logging.info(f"✅ Switched to {role} role")
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except NoSuchWindowException:
             return False, "Browser closed during role switch", ErrorLevel.TERMINAL
@@ -220,9 +220,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             logging.info(f"⏳ Current status: '{old_status}' - accepting for apply")
 
             # Wait for and set action
-            logging.info("⏳ Waiting for ActionsList dropdown...")
-            self.wait_for_kendo_dropdown("ActionsList")
-            logging.info("✅ ActionsList ready")
+            self.wait_for_page_fully_ready() # probably add widget "ActionsList"
 
             action_value = f'/Soc/TriggerChangeWorkflowState/{self.SOC_id}?trigger=AcceptForApply'
             logging.info(f"🔧 Setting action: {action_value}")
@@ -257,7 +255,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
                 return False, error_msg, severity
                 
             logging.info(f"✅ SOC accepted - new status: '{self.SOC_status}'")
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except NoSuchWindowException:
             return False, "Browser closed during SOC acceptance", ErrorLevel.TERMINAL
@@ -278,7 +276,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
                     selected_text = drop.first_selected_option.text
                     logging.info(f"✅ Point {point_index} updated to {selected_text}")
             
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
         except Exception as e:
             return False, f"Failed to update points: {e}", ErrorLevel.RECOVERABLE
 
@@ -291,9 +289,14 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
         try:
             SOC_view_base_link = self._base_link + r"Soc/Details/"
             self.driver.get(SOC_view_base_link + self.SOC_id)
-
-            self.error_404_not_present_check()
-            self.url_contains_SOC_Details_check()
+            
+            success, error_msg = self.error_404_not_present_check()
+            if not success:
+                return False, error_msg, ErrorLevel.FATAL
+            
+            is_correct_page, error_msg = self.url_contains_SOC_Details_check()
+            if not is_correct_page:
+                return False, error_msg, ErrorLevel.FATAL
 
             # Get and check status
             success, error_msg, severity = self.get_SOC_status()
@@ -331,7 +334,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
                                         locator, style_addons={'width': '100%', 'align': 'center'})
                 return False, error_msg, ErrorLevel.FATAL
 
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except NoSuchWindowException:
             return False, "Browser closed during navigation", ErrorLevel.TERMINAL
@@ -351,8 +354,13 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
                 SOC_update_base_link = self._base_link + r"Soc/UpdateOverride/"
                 self.driver.get(SOC_update_base_link + self.SOC_id)
 
-                self.SOC_locked_check()
-                self.access_denied_check()
+                success, error_msg = self.SOC_locked_check()
+                if not success:
+                    return False, error_msg, ErrorLevel.FATAL
+                
+                success, error_msg = self.access_denied_check()
+                if not success:
+                    return False, error_msg, ErrorLevel.FATAL
 
                 # Wait for points and update them
                 WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
@@ -365,7 +373,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
                     
                 self.wait_for_user_confirmation()
 
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except NoSuchWindowException:
             return False, "Browser closed during role processing", ErrorLevel.TERMINAL
@@ -424,11 +432,14 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
         if standalone:
             self.navigate_to_base()
             self.enter_credentials_and_prepare_soc_input()
-            success = self.wait_for_soc_input_and_submit()  # Now returns bool
+                        
+            success, error_msg = self.wait_for_soc_input_and_submit()
             if not success:
-                logging.error("❌ SOC input and submission failed")
-                return
-        
+                # this is the way to use with function calls from the mixin
+                # we convert it to our error handling approach
+                if not self._handle_result(False, error_msg, ErrorLevel.FATAL):
+                    return
+                    
         # Main workflow with proper severity handling
         success, error_msg, severity = self.navigate_to_soc_and_check_status()
         if not self._handle_result(success, error_msg, severity):

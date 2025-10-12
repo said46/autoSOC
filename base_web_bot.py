@@ -59,20 +59,6 @@ class BaseWebBot:
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = 300  # Default timeout for user actions
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = 20    # Default timeout for page loads
         self.ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
-
-    def process_exception(self, msg: str, e: Exception = None, include_e_text_to_log = True, include_e_type_to_log = False) -> None:
-        """NOT USED IN CONTROLLER ANYMORE, LEFT FOR COMPATABILITY WITH EXPORTER/IMPORTER"""
-        """SUBJECT TO CHANGE OR DELETE LATER"""
-        final_msg = msg
-        if e:
-            if include_e_text_to_log:
-                final_msg = final_msg + " " + str(e)
-            if include_e_type_to_log:
-                final_msg = final_msg + f" type of exception: {type(e)}"
-        else:
-            logging.error(msg)
-        
-        self.inject_error_message(msg)
     
     # ===== CORE WEBDRIVER MANAGEMENT =====
 
@@ -207,38 +193,174 @@ class BaseWebBot:
             logging.error(f"❌ Error clicking button {locator}: {e}")
             return False
 
-    def wait_for_kendo_dropdown(self, element_id: str, timeout: int = 10) -> bool:
+    # ===== DOM/jQuery/Kendo elements readines =====
+    
+    def wait_for_page_fully_ready(self, 
+                                check_dom: bool = True,
+                                check_jquery: bool = True, 
+                                check_kendo: bool = True,
+                                specific_widgets: list = None,
+                                timeout: int = None) -> bool:
         """
-        Wait for a Kendo UI DropDownList to be fully initialized and ready.
-
+        Unified method to wait for page complete readiness including Kendo widgets.
+        
         Args:
-            element_id: HTML ID of the Kendo dropdown element
-            timeout: Maximum time to wait in seconds
-
+            check_dom: Wait for DOM ready state
+            check_jquery: Wait for jQuery
+            check_kendo: Wait for Kendo framework
+            specific_widgets: List of specific widget IDs to wait for
+            timeout: Override default timeout
+        
         Returns:
-            bool: True if dropdown is ready, False if timeout occurs
+            bool: True if all checks pass
         """
+        if timeout is None:
+            timeout = self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS
+            
         try:
-            WebDriverWait(self.driver, timeout).until(
-                lambda _: self.driver.execute_script(
-                    f"return typeof jQuery !== 'undefined' && jQuery('#{element_id}').data('kendoDropDownList') !== undefined;"
-                )
-            )
+            wait = WebDriverWait(self.driver, timeout)
+            
+            # Step 1: DOM Ready (if requested)
+            if check_dom:
+                logging.info("⏳ Waiting for DOM ready state...")
+                wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
+            
+            # Step 2: jQuery (if requested)
+            if check_jquery:
+                logging.info("⏳ Waiting for jQuery...")
+                wait.until(lambda d: d.execute_script("return typeof jQuery !== 'undefined'"))
+            
+            # Step 3: Kendo Framework (if requested)
+            if check_kendo:
+                logging.info("⏳ Waiting for Kendo framework...")
+                wait.until(lambda d: d.execute_script("return typeof kendo !== 'undefined'"))
+            
+            # Step 4: Specific Widgets (if provided)
+            if specific_widgets:
+                for widget_id in specific_widgets:
+                    logging.info(f"⏳ Waiting for widget: {widget_id}...")
+                    wait.until(self._widget_ready_condition(widget_id))
+            
+            # Step 5: Default Kendo widgets (if none specified)
+            elif check_kendo:
+                logging.info("⏳ Waiting for default Kendo widgets...")
+                wait.until(self._default_widgets_ready())
+            
+            logging.info("✅ Page fully ready with all widgets loaded")
             return True
-        except TimeoutException:
-            logging.warning(f"⚠️ Timeout waiting for Kendo dropdown '{element_id}' to initialize")
+            
+        except TimeoutException as e:
+            logging.error(f"⏰ Timeout waiting for page readiness: {e}")
             return False
         except Exception as e:
-            logging.error(f"❌ Error waiting for Kendo dropdown '{element_id}': {e}")
+            logging.error(f"❌ Error waiting for page readiness: {e}")
             return False
 
-    def wait_page_fully_loaded(self):
-        wait_for = "page fully loaded (no jQuery check)"
-        logging.info(f"⌛ Waiting for {wait_for}")
-        WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-            lambda _: (self.driver.execute_script("return document.readyState") == "complete")
-        )
-        logging.info(f"🏁 {wait_for}")
+    def _widget_ready_condition(self, widget_id: str):
+        """Create wait condition for specific widget type."""
+        
+        class WidgetReady:
+            def __init__(self, widget_id, driver):
+                self.widget_id = widget_id
+                self.driver = driver
+                
+            def __call__(self, driver):
+                try:
+                    # Detect widget type and check accordingly
+                    result = self.driver.execute_script(f"""
+                        try {{
+                            var element = $('#{self.widget_id}');
+                            if (!element.length) return false;
+                            
+                            // Check for Kendo Grid
+                            var grid = element.data('kendoGrid');
+                            if (grid) {{
+                                return grid.dataSource && 
+                                       grid.dataSource.data().length > 0 &&
+                                       !grid.dataSource._loading;
+                            }}
+                            
+                            // Check for Kendo DropDown
+                            var dropdown = element.data('kendoDropDownList');
+                            if (dropdown) {{
+                                return dropdown.dataSource && 
+                                       dropdown.dataItems().length > 0;
+                            }}
+                            
+                            // Default: just check if widget exists
+                            return element.data('kendoWidget') !== undefined;
+                            
+                        }} catch (e) {{
+                            console.log('Widget check error:', e);
+                            return false;
+                        }}
+                    """)
+                    return result
+                except:
+                    return False
+        
+        return WidgetReady(widget_id, self.driver)
+
+    def _default_widgets_ready(self):
+        """Wait condition for commonly used Kendo widgets."""
+        
+        class DefaultWidgetsReady:
+            def __init__(self, driver):
+                self.driver = driver
+                
+            def __call__(self, driver):
+                try:
+                    result = self.driver.execute_script("""
+                        try {
+                            // Common Kendo widgets to check
+                            var widgets = [
+                                {id: 'Overrides', type: 'grid'},
+                                {id: 'ActionsList', type: 'dropdown'},
+                                {id: 'CurrentRoleName', type: 'dropdown'},
+                                {id: 'OverrideTypeId', type: 'dropdown'},
+                                {id: 'OverrideMethodId', type: 'dropdown'},
+                                {id: 'OverrideAppliedStateId', type: 'dropdown'},
+                                {id: 'OverrideRemovedStateId', type: 'dropdown'}
+                            ];
+                            
+                            for (var i = 0; i < widgets.length; i++) {
+                                var widget = widgets[i];
+                                var element = $('#' + widget.id);
+                                
+                                if (!element.length) {
+                                    // Element doesn't exist on this page, skip
+                                    continue;
+                                }
+                                
+                                if (widget.type === 'grid') {
+                                    var grid = element.data('kendoGrid');
+                                    if (!grid || !grid.dataSource || grid.dataSource._loading) {
+                                        return false;
+                                    }
+                                    // For grids, require at least empty data array
+                                    if (!grid.dataSource.data()) {
+                                        return false;
+                                    }
+                                }
+                                else if (widget.type === 'dropdown') {
+                                    var dropdown = element.data('kendoDropDownList');
+                                    if (!dropdown || !dropdown.dataSource) {
+                                        return false;
+                                    }
+                                }
+                            }
+                            return true;
+                            
+                        } catch (e) {
+                            console.log('Default widgets check error:', e);
+                            return false;
+                        }
+                    """)
+                    return result
+                except:
+                    return False
+        
+        return DefaultWidgetsReady(self.driver)
 
     # ===== MESSAGE INJECTION METHODS =====
 

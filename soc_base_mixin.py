@@ -169,18 +169,18 @@ class SOC_BaseMixin:
 
     # ===== SECURITY AND ACCESS CHECKS =====
 
-    def SOC_locked_check(self) -> None:
+    def SOC_locked_check(self) -> tuple[bool, str | None]:
         """Check if SOC is locked and handle accordingly by showing error message."""
         try:
             locked_xpath = "//div[@class='text-danger validation-summary-valid']//li[contains(., 'заблокирован')]"
             li_locked = self.driver.find_element(By.XPATH, locked_xpath)
             error_msg = f"❌ SOC is locked: {li_locked.text}"
-            logging.error(error_msg)
-            self.inject_error_message(error_msg)
+            return False, error_msg
         except NoSuchElementException:
             logging.info("✅ Success: SOC is not locked")
+            return True, None
 
-    def access_denied_check(self) -> None:
+    def access_denied_check(self) -> tuple[bool, str | None]:
         """Check for Access Denied error and handle accordingly."""
         """REWORK WHEN HAPPENS!!!! see in correct XPATH below"""
         try:
@@ -188,39 +188,44 @@ class SOC_BaseMixin:
             self.driver.find_element(By.XPATH, access_denied_xpath)
             error_msg = f"❌ Access denied, SOC {self.SOC_id} may be archived or in improper state"
             logging.error(error_msg)
-            self.inject_error_message(error_msg)
+            return False, error_msg
         except NoSuchElementException:
             logging.info("✅ Success: no access denied issue")
+            return True, None
         except InvalidSelectorException:
             logging.warning(f"InvalidSelectorException is TEMPORARY DISABLED IN access_denied_check()")
+            return True, None
 
-    def login_failed_check(self) -> None:
+    def login_failed_check(self) -> tuple[bool, str | None]:
         """Check for login failure and handle accordingly."""
         try:
             login_failed_xpath = "//div[contains(@class, 'validation-summary-errors')]"
-            locked_xpath = "//div[@class='text-danger validation-summary-valid']//li[contains(., 'заблокирован')]"
-            self.driver.find_element(By.XPATH, locked_xpath)
+            self.driver.find_element(By.XPATH, login_failed_xpath)
             error_msg = "❌ Login issue, check the password in ini-file."
-            logging.error(error_msg)
-            self.inject_error_message(error_msg)
+            return False, error_msg
         except NoSuchElementException:
             logging.info("✅ Success: no login issue")
+            return True, None
 
-    def error_404_not_present_check(self) -> None:
+    def error_404_not_present_check(self) -> tuple[bool, str | None]:
         """Check if no 404 error is present on the page."""
         try:
             self.driver.find_element(By.XPATH, "//h1[contains(@class, 'text-danger') and contains(text(), '404')]")
-            logging.error(f"❌ Error 404, probably SOC {self.SOC_id} does not exist")
-            self.inject_error_message(f"❌ Error 404, probably SOC {self.SOC_id} does not exist.")
+            error_msg = f"❌ Error 404, probably SOC {self.SOC_id} does not exist"
+            logging.error(error_msg)
+            return False, error_msg
         except NoSuchElementException:
             logging.info("✅ Success: no error 404")
+            return True, False
 
-    def url_contains_SOC_Details_check(self):
+    def url_contains_SOC_Details_check(self) -> tuple[bool, str | None]:
         """Verify that the current URL contains the SOC Details path."""
         current_url = self.driver.current_url
         if "/Soc/Details/" not in current_url:
-            logging.error(f"❌ Wrong page loaded: {current_url}. Expected SOC Details page.")
-            self.inject_error_message(f"❌ Wrong page loaded, navigation failed.")
+            error_message = f"❌ Wrong page loaded: {current_url}. Expected SOC Details page."
+            logging.error(error_message)
+            return False, error_message
+        return True, None
 
     # ===== SOC INPUT FIELD MANAGEMENT =====
 
@@ -375,12 +380,9 @@ class SOC_BaseMixin:
 
     # ===== SOC INPUT PROCESSING AND FORM SUBMISSION =====
 
-    def wait_for_soc_input_and_submit(self) -> bool:
+    def wait_for_soc_input_and_submit(self) -> tuple[bool, str | None]:
         """
         Wait for SOC ID input and submit the form.
-        
-        Returns:
-            bool: True if successful, False if failed
         """
         try:
             # Wait for valid SOC ID input with timeout
@@ -390,9 +392,10 @@ class SOC_BaseMixin:
 
             # If browser closed, exit
             if self._is_browser_closed():
-                logging.info("🏁 Browser closed by user during input")
+                error_msg = "🏁 Browser closed by user during input"
+                logging.info(error_msg)
                 self.safe_exit()
-                return False  # This line won't be reached due to safe_exit(), but for completeness
+                return False, error_msg  # This line won't be reached due to safe_exit(), but for completeness
 
             # Get the SOC_id from the injected input field
             raw_soc_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")
@@ -422,16 +425,21 @@ class SOC_BaseMixin:
             
             # Submit the form
             success = self.submit_form_with_soc_id()
-            return success
+
+            success, error_msg = self.login_failed_check()
+            if not success:
+                return False, error_msg
+
+            return True, None
 
         except (NoSuchWindowException, WebDriverException):
             logging.warning(f"🏁 Browser window was closed, end of script")
             self.safe_exit()
-            return False
         except Exception as e:
-            logging.error(f"❌ Failed to wait for SOC_id to be entered: {str(e)}")
-            self.inject_error_message(f"❌ Failed to wait for SOC_id to be entered.")
-            return False
+            error_msg = "❌ Failed to wait for SOC_id to be entered"
+            logging.error(f"{error_msg}: {str(e)}")
+            self.inject_error_message(error_msg)
+            return False, error_msg
 
     def submit_form_with_soc_id(self) -> bool:
         """

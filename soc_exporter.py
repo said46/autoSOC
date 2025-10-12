@@ -59,7 +59,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
 
             logging.info(f"✅ Configuration loaded from {self.config_file}")
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except Exception as e:
             return False, f"Configuration failed: {e}", ErrorLevel.FATAL
@@ -87,19 +87,26 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
             self.driver.get(soc_details_url)
 
-            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-                lambda driver: driver.execute_script("return document.readyState") == "complete"
-            )
+            success, error_msg = self.error_404_not_present_check()
+            if not success:
+                return False, error_msg, ErrorLevel.FATAL            
 
-            self.error_404_not_present_check()
-            self.url_contains_SOC_Details_check()
+            # 🔥 SINGLE WAIT CALL FOR EVERYTHING
+            if not self.wait_for_page_fully_ready(
+                specific_widgets=['Overrides']  # Wait specifically for the grid
+            ):
+                return False, "Page failed to load completely", ErrorLevel.RECOVERABLE
 
-            logging.info("✅ Successfully navigated to SOC Details")
-            return True, None, ErrorLevel.RECOVERABLE
-        except (WebDriverException, NoSuchWindowException):
-            error_msg = "Browser closed during navigation"
-            logging.warning(error_msg)
-            return False, error_msg, ErrorLevel.TERMINAL
+            if not self.error_404_not_present_check():
+                return False, "Edit overrides page verification failed", ErrorLevel.FATAL
+            
+            is_correct_page, error_msg = self.url_contains_SOC_Details_check()
+            if not is_correct_page:
+                return False, error_msg, ErrorLevel.FATAL
+
+            logging.info("✅ Successfully navigated to SOC Details with all widgets ready")
+            return True, None, None
+            
         except Exception as e:
             error_msg = f"Navigation failed: {e}"
             logging.error(error_msg)
@@ -119,7 +126,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             if no_data_elements:
                 logging.info("ℹ️ No overrides data found")
                 return True, "No overrides data found", ErrorLevel.RECOVERABLE
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except NoSuchElementException:
             logging.warning("⚠️ Overrides section not found")
@@ -131,31 +138,12 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     def extract_overrides_table_data(self) -> tuple[bool, list | None, list | None, str | None, ErrorLevel]:
         """
         Extract SOC overrides data matching the importer's expected format.
-        Returns (success, headers, rows, error_message, severity)
         
         Expected column order for importer:
         TagNumber, Description, OverrideType, OverrideMethod, Comment, 
         AppliedState, AdditionalValueAppliedState, RemovedState, AdditionalValueRemovedState
         """
         try:
-            logging.info("🔍 Extracting SOC overrides data...")
-
-            success, error_msg, severity = self.check_if_overrides_exist()
-            if not success:
-                return False, [], [], error_msg, severity
-
-            # Wait for Kendo framework and grid data
-            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-                lambda _: self.driver.execute_script("return typeof kendo !== 'undefined'")
-            )
-
-            WebDriverWait(self.driver, self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS).until(
-                lambda _: self.driver.execute_script("""
-                    var grid = $('#Overrides').data('kendoGrid');
-                    return grid && grid.dataSource && grid.dataSource.data().length > 0;
-                """)
-            )
-
             script = """
             var grid = $('#Overrides').data('kendoGrid');
             if (!grid || !grid.dataSource) return null;
@@ -198,14 +186,8 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
             return True, [], [], "No data extracted", ErrorLevel.RECOVERABLE
 
-        except TimeoutException:
-            error_msg = "Timeout waiting for data"
-            logging.warning(f"⚠️ {error_msg}")
-            return False, [], [], error_msg, ErrorLevel.RECOVERABLE
         except Exception as e:
-            error_msg = f"Failed to extract data: {e}"
-            logging.error(f"❌ {error_msg}")
-            return False, [], [], error_msg, ErrorLevel.FATAL
+            return False, [], [], f"Failed to extract data: {e}", ErrorLevel.FATAL
 
     # =========================================================================
     # EXCEL EXPORT METHODS
@@ -236,61 +218,56 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     def create_excel_file(self, headers: list, rows: list, filename: str = None) -> OperationResult:
         """
         Create Excel file with fixed column order matching the importer's expectations.
-        Returns (success, error_message, severity)
         
-        File structure:
+        File structure (same as old version):
         - Rows 1-4: Metadata
+        - Row 5: Empty (spacing)
         - Row 6: Headers (fixed order for importer)
         - Rows 7+: Data rows
         """
-        if not headers or not rows:
-            error_msg = "No data to export"
-            logging.error(f"❌ {error_msg}")
-            return False, error_msg, ErrorLevel.RECOVERABLE
-
         try:
-            # Use fixed filename for importer compatibility
             if filename is None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"soc_import_export/SOC_{self.SOC_id}_overrides_{timestamp}.xlsx"                
+                filename = f"soc_import_export/SOC_{self.SOC_id}_overrides_{timestamp}.xlsx"
 
             workbook = openpyxl.Workbook()
             sheet = workbook.active
             sheet.title = f'SOC_{self.SOC_id}'
 
-            # Add metadata
+            # === METADATA (same as old version) ===
             metadata = [
                 "SOC Overrides Export",
                 f"SOC ID: {self.SOC_id}",
                 f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 f"Total Overrides: {len(rows)}",
-                "",  # Empty row for spacing
+                "",  # Empty row for spacing (row 5)
                 # Row 6 will contain headers
             ]
+            
             for i, value in enumerate(metadata, 1):
                 sheet.cell(row=i, column=1, value=value)
 
-            # Write headers at row 6 (matching importer expectation)
+            # === HEADERS at row 6 (same as old version) ===
             header_row = 6
             for col_index, header in enumerate(headers, 1):
                 cell = sheet.cell(row=header_row, column=col_index, value=header)
                 cell.font = openpyxl.styles.Font(bold=True)
                 
-                # Add light background color to headers
+                # Light gray background (same as old version)
                 cell.fill = openpyxl.styles.PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
 
-            # Write data starting from row 7 (matching importer expectation)
+            # === DATA starting from row 7 (same as old version) ===
             for row_index, row_data in enumerate(rows, header_row + 1):
                 for col_index, cell_value in enumerate(row_data, 1):
                     sheet.cell(row=row_index, column=col_index, value=cell_value)
 
-            # Adjust column widths
+            # Adjust column widths for better readability
             self._auto_adjust_column_widths(sheet, headers, rows)
 
             workbook.save(filename)
             logging.info(f"💾 Saved to: {filename}")
             logging.info(f"📁 File ready for import with {len(rows)} overrides")
-            return True, None, ErrorLevel.RECOVERABLE
+            return True, None, None
 
         except Exception as e:
             error_msg = f"Failed to create Excel: {e}"
@@ -309,7 +286,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                 return False, error_msg, severity
 
             if not headers or not rows:
-                msg = f"ℹ️ No overrides found for SOC {self.SOC_id}"
+                msg = f"⚡  No overrides found for SOC {self.SOC_id}"
                 logging.info(msg)
                 self._inject_message_with_wait(msg, style_addons={'color': 'orange'})
                 return True, msg, ErrorLevel.RECOVERABLE
@@ -319,7 +296,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                     msg = f"✅ SOC {self.SOC_id} overrides exported successfully ({len(rows)} records)"
                     logging.info(msg)
                     self._inject_message_with_wait(msg, style_addons={'color': 'darkorange'})
-                    return True, None, ErrorLevel.RECOVERABLE
+                    return True, None, None
                 else:
                     msg = f"❌ Failed to save Excel for SOC {self.SOC_id}: {error_msg}"
                     self._inject_message_with_wait(msg, style_addons={'color': 'red'})
@@ -367,16 +344,20 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
         if standalone:
             self.navigate_to_base()
             self.enter_credentials_and_prepare_soc_input()
-            success = self.wait_for_soc_input_and_submit()  # Now returns bool
+            
+            success, error_msg = self.wait_for_soc_input_and_submit()
             if not success:
-                logging.error("❌ SOC input and submission failed")
-                return
+                # this is the way to use with function calls from the mixin
+                # we convert it to our error handling approach
+                if not self._handle_result(False, error_msg, ErrorLevel.FATAL):
+                    return                
 
         # Main workflow with proper severity handling
+        
         success, error_msg, severity = self.navigate_to_soc_details()
         if not self._handle_result(success, error_msg, severity):
             return
-            
+       
         success, error_msg, severity = self.extract_and_export_overrides()
         if not self._handle_result(success, error_msg, severity):
             return
