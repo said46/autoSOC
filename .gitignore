@@ -2,6 +2,7 @@ auto-py-to-exe.txt
 *.exe
 *.log
 *.spec
+*.ico
 __pycache__/
 build/
 dist/
