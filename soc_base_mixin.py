@@ -392,8 +392,11 @@ class SOC_BaseMixin:
             - is_valid: Boolean indicating if input is valid
             - message: Descriptive message for the user
         """
-        value = value.strip()
-
+        if ' ' in value:
+            return False, "⚠️ Spaces are not allowed in SOC ID"        
+        
+        value = value.strip()      
+        
         if not value:
             return False, "⚠️ Empty value is not allowed"
 

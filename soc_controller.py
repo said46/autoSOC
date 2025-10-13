@@ -72,7 +72,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
                 self.SOC_ID_PATTERN = r"^\d{4,8}$"
             else:
-                self.SOC_ID_PATTERN = r"^\d{7,8}$"            
+                self.SOC_ID_PATTERN = r"^\d{7,8}$"
 
             return True, None, None
 
