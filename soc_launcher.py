@@ -3,6 +3,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import (NoSuchElementException, NoSuchWindowException)
 import logging
+import base64
+import os
 
 from base_web_bot import BaseWebBot
 from soc_base_mixin import SOC_BaseMixin
@@ -25,12 +27,34 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
         self._initialized = False
         self.selected_bot = "control"  # Default selection
         
+        # Load and convert image to base64
+        self.base64_logo = self.image_to_base64("LOGO.png")
+        
         # Load configuration with proper error handling
         success, error_msg, severity = self.load_configuration()
         if not self._handle_result(success, error_msg, severity):
             return
             
         self._initialized = True
+
+    def image_to_base64(self, image_path: str) -> str:
+        """
+        Convert image file to base64 string.
+        Returns base64 string or empty string if file not found.
+        """
+        try:
+            if not os.path.exists(image_path):
+                logging.warning(f"⚠️ Image file {image_path} not found, using placeholder")
+                return ""
+                
+            with open(image_path, "rb") as image_file:
+                base64_data = base64.b64encode(image_file.read()).decode('utf-8')
+                logging.info(f"✅ Image {image_path} converted to base64 ({len(base64_data)} chars)")
+                return base64_data
+                
+        except Exception as e:
+            logging.error(f"❌ Failed to convert image to base64: {e}")
+            return ""
 
     def load_configuration(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
@@ -39,16 +63,9 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
             config = configparser.ConfigParser(interpolation=None)
             config.read(self.config_file, encoding="utf8")
 
-            self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
-            raw_password = config.get('Settings', 'password', fallback='******')
-            self.password = self.process_password(raw_password)
-
-            if '\n' in self.password:
-                self.password = 'INCORRECT PASSWORD'
-
-            self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
-            self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
-            self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)
+            success, error_msg, severity = self.load_common_configuration(config)
+            if not success:
+                return False, error_msg, severity            
 
             logging.info(f"✅ Launcher configuration loaded from {self.config_file}")
             return True, None, None
@@ -97,7 +114,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
                 
                 // Create radio buttons
                 var options = [
-                    {id: 'control', label: '🚀 Control (Default) - Process SOC roles'},
+                    {id: 'control', label: '🚀 Control - Apply/remove overrides'},
                     {id: 'export', label: '⏩ Export - Export overrides to Excel'},
                     {id: 'import', label: '⏪ Import - Import overrides from Excel'}
                 ];
@@ -165,9 +182,70 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
 
     def enter_credentials_and_prepare_launcher(self) -> None:
         """
-        Enhanced version that includes bot selection radio buttons.
+        Enhanced version that includes scarlet text, larger image, and bot selection radio buttons.
         """
         try:
+            # Inject scarlet text and larger image
+            header_js = """
+                // Create main container
+                var mainContainer = document.createElement('div');
+                mainContainer.id = 'InjectedMainContainer';
+                mainContainer.style.cssText = 'text-align: center; margin: 20px 0;';
+                
+                // Create image container with larger size
+                var imgContainer = document.createElement('div');
+                imgContainer.id = 'InjectedImageContainer';
+                imgContainer.style.cssText = 'margin: 15px 0;';
+                
+                var img = document.createElement('img');
+                img.id = 'InjectedLogo';
+                img.alt = 'SOC Logo';
+                img.style.cssText = 'max-width: 300px; max-height: 150px; border-radius: 5px;';
+                
+                imgContainer.appendChild(img);
+                
+                // Create scarlet text (no background, just scarlet colored text)
+                var textElement = document.createElement('div');
+                textElement.id = 'InjectedScarletText';
+                textElement.textContent = 'АСУ СБЗ "SOCовыжималка"';
+                textElement.style.cssText = 'color: #FF2400; font-size: 32px; font-weight: bold; font-family: Calibri, sans-serif; margin: 10px 0;';
+                
+                mainContainer.appendChild(imgContainer);
+                mainContainer.appendChild(textElement);
+                
+                // Insert at the top of the form
+                var loginForm = document.querySelector('form');
+                if (loginForm) {
+                    loginForm.insertBefore(mainContainer, loginForm.firstChild);
+                } else {
+                    // Fallback: insert at top of body
+                    document.body.insertBefore(mainContainer, document.body.firstChild);
+                }
+            """
+            self.driver.execute_script(header_js)
+            
+            # Set the image source with base64 data
+            if self.base64_logo:
+                set_image_js = f"document.getElementById('InjectedLogo').src = 'data:image/png;base64,{self.base64_logo}';"
+                self.driver.execute_script(set_image_js)
+                logging.info("✅ Logo image injected successfully")
+            else:
+                # Fallback to larger text placeholder if image not available
+                fallback_js = """
+                    var imgContainer = document.getElementById('InjectedImageContainer');
+                    if (imgContainer) {
+                        var placeholder = document.createElement('div');
+                        placeholder.textContent = '🚀 SOCовыжималка';
+                        placeholder.style.cssText = 'color: #FF2400; font-size: 24px; font-weight: bold; padding: 20px; border: 2px dashed #FF2400; display: inline-block; background: #FFF0F0; border-radius: 5px;';
+                        imgContainer.innerHTML = '';
+                        imgContainer.appendChild(placeholder);
+                    }
+                """
+                self.driver.execute_script(fallback_js)
+                logging.info("✅ Text placeholder injected (image not available)")
+            
+            logging.info("✅ Scarlet text and larger logo container injected")
+
             # Enter username and password
             self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
             if self.password != "INCORRECT PASSWORD":

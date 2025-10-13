@@ -37,29 +37,22 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             # Can't use inject_error_message here - browser not ready yet
             print(f"❌ FATAL: {error_msg}")
             raise RuntimeError(f"Controller initialization failed: {error_msg}")
-            
-        if soc_id:
-            self.SOC_id = soc_id
-            
+                      
         self._initialized = True
 
+    # ===== LOAD CONFIG FROM INI =====
+    
     def load_configuration(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
         try:
+            import configparser
             config = configparser.ConfigParser(interpolation=None)
             config.read(self.config_file, encoding="utf8")
 
-            self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
-            raw_password = config.get('Settings', 'password', fallback='******')
-            self.password = self.process_password(raw_password)
-
-            if '\n' in self.password:
-                self.password = 'INCORRECT PASSWORD'
-
-            self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
-            self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
-            self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)
-            self.SOC_id = config.get('Settings', 'SOC_id', fallback='')
+            # ✅ Common configuration (includes SOC_id)
+            success, error_msg, severity = self.load_common_configuration(config)
+            if not success:
+                return False, error_msg, severity
 
             self.SOC_roles = config.get('Roles', 'SOC_roles', fallback='OAC,OAV').split(',')
             self.good_statuses = config.get(
@@ -79,7 +72,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
                 self.SOC_ID_PATTERN = r"^\d{4,8}$"
             else:
-                self.SOC_ID_PATTERN = r"^\d{7,8}$"
+                self.SOC_ID_PATTERN = r"^\d{7,8}$"            
 
             return True, None, None
 

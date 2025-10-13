@@ -6,7 +6,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import (NoSuchElementException, NoSuchWindowException,
                                       WebDriverException, InvalidSelectorException)
+import configparser
+
 from soc_DB import SQLQueryDirect
+from error_types import ErrorLevel, OperationResult
 
 class SOC_BaseMixin:
     """
@@ -36,6 +39,7 @@ class SOC_BaseMixin:
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = 300  # Max wait time for user input
         self.ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
         self.config_file = 'SOC.ini'  # Default configuration file
+        self.SOC_id = ''  # Initialized for safety
 
     # ===== CUSTOM WAIT CONDITION CLASS =====
 
@@ -112,20 +116,37 @@ class SOC_BaseMixin:
             """Use the parent class method to check if browser is closed"""
             return self.soc_mixin._is_browser_closed()                
 
+    # ===== LOAD CONFIG FROM INI =====
+    
+    def load_common_configuration(self, config: configparser.ConfigParser) -> OperationResult:
+        """Load configuration common to all SOC bots"""
+        try:           
+            self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
+            raw_password = config.get('Settings', 'password', fallback='******')
+            self.password = self.process_password(raw_password)
+
+            if '\n' in self.password:
+                self.password = 'INCORRECT PASSWORD'
+
+            self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
+            self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
+            self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=30)
+            
+            # ✅ SOC_id assigned once
+            self.SOC_id = config.get('Settings', 'SOC_id', fallback='')
+            logging.info(f"🔧 Loaded SOC_id from config: '{self.SOC_id}'") 
+            
+            return True, None, None
+        except Exception as e:
+            return False, f"Loading common configuration failed: {e}", ErrorLevel.FATAL    
+    
     # ===== PASSWORD PROCESSING =====
 
     def process_password(self, password: str) -> str:
         """
         Decode base64 encoded password or return plain text as fallback.
-
         This provides a basic level of password obfuscation in configuration files.
         If base64 decoding fails, the method falls back to using the password as plain text.
-
-        Args:
-            password: The password string (either base64 encoded or plain text)
-
-        Returns:
-            Decoded password if base64 was valid, otherwise original password
         """
         encoded_password = password
         try:
@@ -145,8 +166,6 @@ class SOC_BaseMixin:
         2. Checks for password issues (like line breaks)
         3. Displays any warning messages from configuration
         4. Injects the SOC ID input field for user entry
-
-        💡 TIP: If password contains line breaks, it will show an error and exit
         """
         try:
             # Enter username and password
@@ -231,18 +250,13 @@ class SOC_BaseMixin:
 
     def inject_SOC_id_input(self) -> None:
         """
-        Inject SOC ID input field into the login form.
-
-        This method:
-        - Creates a custom input field for SOC ID entry
-        - Hides the original submit button to prevent premature form submission
-        - Prevents form submission on Enter key in other fields
-        - Sets up input monitoring and validation
-
-        The injected field becomes the primary input mechanism for SOC ID entry.
+        Inject SOC ID input field into the login form with default value.
         """
         try:
-            js_code = """
+            # Get the default SOC_id (might be empty string)
+            default_soc_id = getattr(self, 'SOC_id', '')
+            
+            js_code = f"""
                 var container = document.createElement('div');
                 container.style.cssText = 'margin-top: 10px;';
 
@@ -252,6 +266,8 @@ class SOC_BaseMixin:
                 input.className = "form-control control-lg";
                 input.style.marginBottom = "5px";
                 input.style.width = "100%";
+                // ✅ PRE-POPULATE with default SOC ID
+                input.value = "{default_soc_id}";
 
                 // Hide the original submit button AND prevent form submission
                 var submitButton = document.querySelector('button[type="submit"]');
@@ -259,27 +275,38 @@ class SOC_BaseMixin:
 
                 // Prevent form submission on Enter in any field
                 var form = document.querySelector('form');
-                if (form) {
-                    form.addEventListener('keypress', function(e) {
-                        if (e.key === 'Enter') {
+                if (form) {{
+                    form.addEventListener('keypress', function(e) {{
+                        if (e.key === 'Enter') {{
                             e.preventDefault();
                             e.stopPropagation();
-                        }
-                    });
-                }
+                        }}
+                    }});
+                }}
 
                 container.appendChild(input);
                 const referenceElement = document.getElementById('Password');
                 referenceElement.insertAdjacentElement('afterend', container);
                 input.focus();
+                
+                // Trigger initial validation if there's a default value
+                if ("{default_soc_id}") {{
+                    var event = new Event('input', {{ bubbles: true }});
+                    input.dispatchEvent(event);
+                }}
             """
             self.driver.execute_script(js_code)
 
             # Now use Python to add the guide text and set up monitoring
             self._setup_input_monitoring()
 
+            if default_soc_id:
+                logging.info(f"✅ Injected SOC input field with default: {default_soc_id}")
+            else:
+                logging.info("✅ Injected SOC input field (no default)")
+
         except NoSuchWindowException:
-            logging.warning(f"🏁  Browser windows was closed, end of script")
+            logging.warning(f"🏁 Browser windows was closed, end of script")
             self.safe_exit()
         except Exception as e:
             logging.error(f"❌ Failed to inject SOC_id input field: {str(e)}")

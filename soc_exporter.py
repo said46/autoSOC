@@ -47,16 +47,10 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             config = configparser.ConfigParser(interpolation=None)
             config.read(self.config_file, encoding="utf8")
 
-            self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
-            raw_password = config.get('Settings', 'password', fallback='******')
-            self.password = self.process_password(raw_password)
-
-            if '\n' in self.password:
-                self.password = 'INCORRECT PASSWORD'
-
-            self._base_link = config.get('Settings', 'base_link', fallback='http://eptw.sakhalinenergy.ru/')
-            self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_PAGE_LOAD_DELAY_SECONDS', fallback=20)
-            self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = config.getint('Settings', 'MAX_WAIT_USER_INPUT_DELAY_SECONDS', fallback=300)
+            # ✅ Common configuration (includes SOC_id)
+            success, error_msg, severity = self.load_common_configuration(config)
+            if not success:
+                return False, error_msg, severity
 
             logging.info(f"✅ Configuration loaded from {self.config_file}")
             return True, None, None
