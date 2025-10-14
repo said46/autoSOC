@@ -77,7 +77,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             return True, None, None
 
         except Exception as e:
-            return False, f"Configuration failed: {e}", ErrorLevel.FATAL
+            return False, f"Configuration failed: {str(e)}", ErrorLevel.FATAL
 
     def _load_database_configuration(self, config: configparser.ConfigParser) -> None:
         if self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID:
@@ -97,7 +97,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
             except (configparser.NoSectionError, configparser.NoOptionError) as e:
                 self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = False
-                self.warning_message = f"⚠️ Database config incomplete: {e}. Disabling database features."
+                self.warning_message = f"⚠️ Database config incomplete: {str(e)}. Disabling database features."
                 logging.warning(self.warning_message)
             except ValueError as e:
                 self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = False
@@ -138,7 +138,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             self.SOC_status = status.lower()
             return True, None, None
         except Exception as e:
-            return False, f"Failed to get SOC status: {e}", ErrorLevel.FATAL
+            return False, f"Failed to get SOC status: {str(e)}", ErrorLevel.FATAL
 
     def get_current_role(self) -> tuple[bool, str | None, ErrorLevel]:
         """Returns (success, role_or_error, severity)"""
@@ -195,7 +195,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
         except NoSuchWindowException:
             return False, "Browser closed during role switch", ErrorLevel.TERMINAL
         except Exception as e:
-            return False, f"Failed to switch role to {role}: {e}", ErrorLevel.FATAL
+            return False, f"Failed to switch role to {role}: {str(e)}", ErrorLevel.FATAL
 
     # =========================================================================
     # SOC WORKFLOW OPERATIONS
@@ -253,7 +253,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
         except NoSuchWindowException:
             return False, "Browser closed during SOC acceptance", ErrorLevel.TERMINAL
         except Exception as e:
-            return False, f"Failed to accept SOC {self.SOC_id}: {e}", ErrorLevel.FATAL
+            return False, f"Failed to accept SOC {self.SOC_id}: {str(e)}", ErrorLevel.FATAL
 
     def update_points(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
@@ -271,7 +271,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             
             return True, None, None
         except Exception as e:
-            return False, f"Failed to update points: {e}", ErrorLevel.RECOVERABLE
+            return False, f"Failed to update points: {str(e)}", ErrorLevel.RECOVERABLE
 
     # =========================================================================
     # NAVIGATION AND WORKFLOW MANAGEMENT
@@ -332,7 +332,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
         except NoSuchWindowException:
             return False, "Browser closed during navigation", ErrorLevel.TERMINAL
         except Exception as e:
-            return False, f"Navigation to SOC failed: {e}", ErrorLevel.FATAL
+            return False, f"Navigation to SOC failed: {str(e)}", ErrorLevel.FATAL
 
     def process_soc_roles(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
@@ -371,7 +371,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
         except NoSuchWindowException:
             return False, "Browser closed during role processing", ErrorLevel.TERMINAL
         except Exception as e:
-            return False, f"Failed to process SOC roles: {e}", ErrorLevel.FATAL
+            return False, f"Failed to process SOC roles: {str(e)}", ErrorLevel.FATAL
 
     # =========================================================================
     # USER INTERACTION METHODS
@@ -390,7 +390,7 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             logging.error("⚠️ User closed browser")
             self.safe_exit()
         except Exception as e:
-            return False, f"Failed waiting for confirm: {e}", ErrorLevel.FATAL
+            return False, f"Failed waiting for confirm: {str(e)}", ErrorLevel.FATAL
 
     # =========================================================================
     # ERROR HANDLING AND EXECUTION CONTROL
@@ -450,5 +450,5 @@ if __name__ == "__main__":
         bot = SOC_Controller()
         bot.run(standalone=True)
     except Exception as e:
-        print(f"❌ Failed to start controller: {e}")
-        logging.error(f"❌ Controller startup failed: {e}")
+        print(f"❌ Failed to start controller: {str(e)}")
+        logging.error(f"❌ Controller startup failed: {str(e)}")

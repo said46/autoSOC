@@ -1,0 +1,70 @@
+[
+    {
+        "OverrideIndex": 1,
+        "TagNumber": "%_060XZY056",
+        "Description": "Соленоид дренчерного клапана XV-6010",
+        "OverrideTypeId": 3,
+        "OverrideType": {
+            "Id": 3,
+            "Title": "Программная форсировка",
+            "TitleLocalization": "Программная форсировка",
+            "Code": 2,
+            "OverrideMethods": null,
+            "ShortForm": "Прог. форсир.",
+            "ShortFormLocalization": "Прог. форсир."
+        },
+        "OverrideMethodId": 4,
+        "OverrideMethod": {
+            "Id": 4,
+            "Title": "Принудительно заморожено с фиксированным значением",
+            "TitleLocalization": "Принудительно заморожено с фиксированным значением",
+            "Code": 3,
+            "ShortForm": "Перев. в фикс.знач.",
+            "ShortFormLocalization": "Перев. в фикс.знач."
+        },
+        "OverrideAppliedStateId": 12,
+        "OverrideAppliedState": {
+            "Id": 12,
+            "Title": "Форсировано",
+            "TitleLocalization": "Форсировано",
+            "Code": 11,
+            "Type": 0
+        },
+        "OverrideRemovedStateId": 13,
+        "OverrideRemovedState": {
+            "Id": 13,
+            "Title": "Расфорсировано",
+            "TitleLocalization": "Расфорсировано",
+            "Code": 12,
+            "Type": 0
+        },
+        "CurrentOverrideStateId": 5,
+        "CurrentState": {
+            "Id": 5,
+            "Title": "Не применено",
+            "TitleLocalization": "Не применено",
+            "Code": 4,
+            "Type": 0
+        },
+        "Comment": "FGS_OPF_CCM2 R04,S02,Ch4",
+        "SystemOverrideCertificateId": 1917444,
+        "SystemOverrideCertificate": null,
+        "OverrideTypes": null,
+        "OverrideMethods": null,
+        "OverrideAppliedStates": null,
+        "OverrideRemovedStates": null,
+        "OverrideCurrentStates": null,
+        "TypeMethod": "Прог. форсир. / Перев. в фикс.знач.",
+        "OverridesJson": null,
+        "Overrides": [],
+        "ReturnUrl": null,
+        "IsUnableToImplement": false,
+        "UnableToImplementReason": null,
+        "IsEditable": false,
+        "AdditionalValueAppliedState": "Зафорсировано",
+        "AdditionalValueRemovedState": null,
+        "Id": 229485,
+        "OrderId": 1,
+        "Title": null
+    }
+]

@@ -53,7 +53,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
                 return base64_data
                 
         except Exception as e:
-            logging.error(f"❌ Failed to convert image to base64: {e}")
+            logging.error(f"❌ Failed to convert image to base64: {str(e)}")
             return ""
 
     def load_configuration(self) -> OperationResult:
@@ -71,7 +71,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
             return True, None, None
 
         except Exception as e:
-            return False, f"Configuration failed: {e}", ErrorLevel.FATAL
+            return False, f"Configuration failed: {str(e)}", ErrorLevel.FATAL
 
     @property
     def base_link(self) -> str:
@@ -165,7 +165,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
             logging.info("✅ Bot selection radio buttons injected")
 
         except Exception as e:
-            logging.error(f"❌ Failed to inject bot selection: {e}")
+            logging.error(f"❌ Failed to inject bot selection: {str(e)}")
 
     def get_selected_bot(self) -> str:
         """
@@ -177,7 +177,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
             logging.info(f"✅ Selected bot: {selected_bot}")
             return selected_bot
         except Exception as e:
-            logging.warning(f"⚠️ Could not get selected bot, using default: {e}")
+            logging.warning(f"⚠️ Could not get selected bot, using default: {str(e)}")
             return "control"
 
     def enter_credentials_and_prepare_launcher(self) -> None:
@@ -265,7 +265,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
             self.inject_SOC_id_input()
 
         except NoSuchElementException as e:
-            logging.error(f"❌ Failed to find login fields: {e}")
+            logging.error(f"❌ Failed to find login fields: {str(e)}")
             self.inject_error_message(f"❌ Failed to find login fields.")
 
     def wait_for_launcher_input_and_submit(self) -> OperationResult:
@@ -308,9 +308,9 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
                         if self.SOC_id is None:
                             raise ValueError("SOC_id cannot be None")
                     except Exception as e:
-                        logging.error(f"❌ Failed to request DB: {e}")
-                        self.inject_error_message(f"❌ Failed to request DB ({e}).")
-                        return False, f"Database error: {e}", ErrorLevel.FATAL
+                        logging.error(f"❌ Failed to request DB: {str(e)}")
+                        self.inject_error_message(f"❌ Failed to request DB ({str(e)}).")
+                        return False, f"Database error: {str(e)}", ErrorLevel.FATAL
 
             logging.info(f"✅ Processed SOC id is {self.SOC_id}, bot: {self.selected_bot}")
 
@@ -331,7 +331,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
             logging.warning(error_msg)
             return False, error_msg, ErrorLevel.TERMINAL
         except Exception as e:
-            error_msg = f"Failed to wait for launcher input: {e}"
+            error_msg = f"Failed to wait for launcher input: {str(e)}"
             logging.error(error_msg)
             self.inject_error_message(f"❌ {error_msg}")
             return False, error_msg, ErrorLevel.FATAL
@@ -364,7 +364,7 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
             return True, None, None
 
         except Exception as e:
-            error_msg = f"Failed to launch {self.selected_bot} bot: {e}"
+            error_msg = f"Failed to launch {self.selected_bot} bot: {str(e)}"
             logging.error(error_msg)
             self.inject_error_message(f"❌ {error_msg}")
             return False, error_msg, ErrorLevel.FATAL
@@ -393,8 +393,8 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
                 return
 
         except Exception as e:
-            logging.error(f"❌ Launcher execution failed: {e}")
-            self.inject_error_message(f"❌ Launcher execution failed: {e}")
+            logging.error(f"❌ Launcher execution failed: {str(e)}")
+            self.inject_error_message(f"❌ Launcher execution failed: {str(e)}")
             self.safe_exit()
 
 
@@ -403,5 +403,5 @@ if __name__ == "__main__":
         launcher = SOC_Launcher()
         launcher.run()
     except Exception as e:
-        print(f"❌ Failed to start launcher: {e}")
-        logging.error(f"❌ Launcher startup failed: {e}")
+        print(f"❌ Failed to start launcher: {str(e)}")
+        logging.error(f"❌ Launcher startup failed: {str(e)}")

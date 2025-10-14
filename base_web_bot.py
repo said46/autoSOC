@@ -190,7 +190,7 @@ class BaseWebBot:
             logging.error(f"⏰ Timeout: Button {locator} not clickable after 10 seconds")
             return False
         except Exception as e:
-            logging.error(f"❌ Error clicking button {locator}: {e}")
+            logging.error(f"❌ Error clicking button {locator}: {str(e)}")
             return False
 
     # ===== DOM/jQuery/Kendo elements readines =====
@@ -214,6 +214,13 @@ class BaseWebBot:
         Returns:
             bool: True if all checks pass
         """
+        logging.info(f"""⚡ wait_for_page_fully_ready() called with 
+                        {check_dom=}, 
+                        {check_jquery=},  
+                        {check_kendo=}", 
+                        {specific_widgets=}, 
+                        {timeout=}""")
+        
         if timeout is None:
             timeout = self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS
             
@@ -250,10 +257,10 @@ class BaseWebBot:
             return True
             
         except TimeoutException as e:
-            logging.error(f"⏰ Timeout waiting for page readiness: {e}")
+            logging.error(f"⏰ Timeout waiting for page readiness: {str(e)}")
             return False
         except Exception as e:
-            logging.error(f"❌ Error waiting for page readiness: {e}")
+            logging.error(f"❌ Error waiting for page readiness: {str(e)}")
             return False
 
     def _widget_ready_condition(self, widget_id: str):

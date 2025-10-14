@@ -4,7 +4,6 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (TimeoutException, NoSuchWindowException, NoSuchElementException, WebDriverException)
 import openpyxl as xl
-import configparser
 import logging
 
 from base_web_bot import BaseWebBot, ErrorLevel
