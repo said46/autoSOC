@@ -344,6 +344,10 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
         try:
             logging.info(f"🚀 Launching {self.selected_bot} bot for SOC {self.SOC_id}")
 
+            # a small pause to let driver stabilize
+            import time
+            time.sleep(0.3)
+
             if self.selected_bot == "control":
                 bot = SOC_Controller(soc_id=self.SOC_id)
             elif self.selected_bot == "export":
@@ -354,9 +358,6 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
                 error_msg = f"Unknown bot type: {self.selected_bot}"
                 logging.error(error_msg)
                 return False, error_msg, ErrorLevel.FATAL
-
-            # Use existing browser session instead of creating new one
-            bot.use_existing_session(self.driver, self.SOC_id)
 
             # Run the bot without standalone mode (we already handled login)
             bot.run(standalone=False)

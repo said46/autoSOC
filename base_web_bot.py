@@ -12,16 +12,10 @@ from selenium.webdriver.chrome.options import Options
 
 import time
 import sys
-from enum import Enum
 
 import logging
 from logging_setup import logging_setup
-
-
-class ErrorLevel(Enum):
-    RECOVERABLE = 1
-    FATAL = 2
-    TERMINAL = 3
+from driver_manager import DriverManager
 
 def message_box(title, text, style):
     """Display a Windows message box using ctypes"""
@@ -54,7 +48,16 @@ class BaseWebBot:
         """Initialize the web bot with logging, exception handling, and WebDriver setup."""
         logging_setup()
         self.setup_global_exception_handler()
-        self.driver = self.create_driver()
+
+        # Check if driver already exists in singleton
+        if DriverManager.is_driver_set():
+            self.driver = DriverManager.get_driver()
+            logging.info("✅ Reusing existing driver from DriverManager")
+        else:
+            self.driver = self.create_driver()
+            DriverManager.set_driver(self.driver)
+            logging.info("✅ New driver created and stored in DriverManager")
+
         self.default_style_addons = {'color': 'red', 'width': None, 'align': 'center'}
         self.MAX_WAIT_USER_INPUT_DELAY_SECONDS = 300  # Default timeout for user actions
         self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS = 20    # Default timeout for page loads
@@ -77,26 +80,6 @@ class BaseWebBot:
         if self.driver:
             self.driver.quit()  # Clean up existing driver
         self.driver = driver
-
-    def use_existing_session(self, driver, soc_id: str = None) -> None:
-        """
-        Use an existing browser session instead of creating a new one.
-
-        Args:
-            driver: Existing WebDriver instance
-            soc_id: Pre-obtained SOC ID (optional)
-        """
-        if self.driver and self.driver != driver:
-            self.driver.quit()  # Clean up existing driver if different
-
-        self.driver = driver
-        self.session_reused = True
-
-        if soc_id:
-            self.SOC_id = soc_id
-            logging.info(f"✅ Using existing session with SOC ID: {soc_id}")
-        else:
-            logging.info("✅ Using existing browser session")
 
     def safe_exit(self) -> None:
         """Clean up resources and exit safely, ensuring WebDriver is properly closed."""
