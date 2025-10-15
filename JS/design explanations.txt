@@ -1,0 +1,12 @@
+I developed soc_exporter not having app.min.js, but the info got from it may shed light on possible incorrect approach in the exporter, 
+espacially in terms of Kendo UI interactions. All the scripts I have provided to u work in a similar manner, automating user actions on 
+the web-pages of ePTW system. The core strategy is, that user always sees the web-page, so he should have a possibility to get info about 
+any possible issues arises, moreover, all the interaction with the user is implemented through message injection into existing HTML. So, 
+the browser window should NEVER be closed without user's interference. Also, at some critical moments, the scripts wait user input, such 
+as entering SOC_id, confirming overrides addition and so on. The logging is intended more for the developer, not for the user. Take into 
+account, that user can close the browser window AT ANY TIME, and the scripts should manage such situations by freeing resources.
+
+Notes: 
+I would like to improve my py-scripts especially in connection to OverrideTypeId, OverrideMethodId, OverrideAppliedStateId, OverrideRemoved-
+StateId, CurrentOverrideStateId interaction. While developing these py the most difficult part was to Kendo UI work properly, because the 
+connected dropdowns are not binded to any datasource until "something" happens, and this api.min.js  could shed the ligth on that.
