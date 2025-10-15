@@ -8,7 +8,7 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 from datetime import datetime
 
-from base_web_bot import BaseWebBot # Removed standalone import of check_browser_alive_or_exit
+from base_web_bot import BaseWebBot
 from soc_base_mixin import SOC_BaseMixin
 from error_types import ErrorLevel, OperationResult
 
@@ -16,6 +16,11 @@ class SOC_Exporter(SOC_BaseMixin):
     """
     Specialized bot for exporting SOC overrides table to Excel.
     Exports data in the same format expected by the SOC_Importer.
+    
+    Improved with better Kendo UI integration based on app.min.js insights:
+    - Proper grid initialization and data source handling
+    - Multiple data extraction strategies
+    - Enhanced error recovery for Kendo widgets
     """
 
     # =========================================================================
@@ -118,38 +123,94 @@ class SOC_Exporter(SOC_BaseMixin):
     # DATA EXTRACTION METHODS
     # =========================================================================
 
-    def wait_for_grid_data_loaded(self, grid_selector='#Overrides', timeout=10) -> bool:
+    def wait_for_grid_data_loaded(self, grid_selector='#Overrides', timeout=15) -> bool:
         """
         Wait specifically for the Kendo grid to finish loading its data.
+        IMPROVED: Added Kendo UI initialization checks and data refresh triggers
+        
         Returns True if data is loaded, False on timeout.
         """
         try:
             wait = WebDriverWait(self.driver, timeout)
             
-            # Wait for grid to have data and not be in loading state
             def grid_data_loaded(driver):
                 try:
                     script = f"""
                     var grid = $('{grid_selector}').data('kendoGrid');
-                    if (!grid) return false;
                     
-                    var dataSource = grid.dataSource;
-                    if (!dataSource) return false;
+                    // Strategy 1: Check if grid exists and has data
+                    if (grid && grid.dataSource) {{
+                        var dataSource = grid.dataSource;
+                        
+                        // If no data but not loading, trigger refresh
+                        if (dataSource.data().length === 0 && !dataSource._loading) {{
+                            dataSource.read();
+                            return false;
+                        }}
+                        
+                        return dataSource.data().length > 0 && !dataSource._loading;
+                    }}
                     
-                    // Check if data is loaded and grid is not currently loading
-                    return dataSource.data().length > 0 && !dataSource._loading;
+                    // Strategy 2: Grid element exists but Kendo widget not bound
+                    var gridElement = $('{grid_selector}');
+                    if (gridElement.length > 0 && !gridElement.data('kendoGrid')) {{
+                        // Check if we need to trigger any initialization events
+                        var parentContainers = gridElement.closest('[data-role]');
+                        if (parentContainers.length > 0) {{
+                            parentContainers.trigger('show');
+                        }}
+                        return false;
+                    }}
+                    
+                    // Strategy 3: Check for loading indicators
+                    var loadingIndicators = $('{grid_selector} .k-loading-mask, {grid_selector} .k-loading');
+                    if (loadingIndicators.length > 0 && loadingIndicators.is(':visible')) {{
+                        return false;
+                    }}
+                    
+                    return false;
                     """
                     return driver.execute_script(script)
-                except:
+                except Exception as e:
+                    logging.debug(f"Grid check error: {e}")
                     return False
             
             return wait.until(grid_data_loaded)
             
         except TimeoutException:
             logging.warning(f"⚠️ Timeout waiting for grid data to load after {timeout} seconds")
-            return False
+            # Try one more approach before giving up
+            return self._fallback_grid_check(grid_selector)
         except Exception as e:
             logging.warning(f"⚠️ Error waiting for grid data: {e}")
+            return False
+
+    def _fallback_grid_check(self, grid_selector: str) -> bool:
+        """
+        Fallback method to check grid data when primary method times out.
+        Uses alternative approaches to verify grid state.
+        """
+        try:
+            # Check if grid element exists and has any visible rows
+            script = f"""
+            var gridElement = $('{grid_selector}');
+            if (gridElement.length === 0) return false;
+            
+            // Check for visible rows in the grid
+            var visibleRows = gridElement.find('tr[data-uid]:visible');
+            if (visibleRows.length > 0) return true;
+            
+            // Check for "no data" message
+            var noDataMessage = gridElement.find('.k-nodata, .no-data');
+            if (noDataMessage.length > 0 && noDataMessage.is(':visible')) {{
+                return true; // Grid is loaded but empty
+            }}
+            
+            return false;
+            """
+            return self.driver.execute_script(script)
+        except Exception as e:
+            logging.debug(f"Fallback grid check failed: {e}")
             return False
 
     def check_if_overrides_exist(self) -> OperationResult:
@@ -178,6 +239,7 @@ class SOC_Exporter(SOC_BaseMixin):
     def extract_overrides_table_data(self) -> tuple[bool, list | None, list | None, str | None, ErrorLevel]:
         """
         Extract SOC overrides data matching the importer's expected format.
+        IMPROVED: Multiple extraction strategies with better error recovery
         
         Expected column order for importer:
         TagNumber, Description, OverrideType, OverrideMethod, Comment, 
@@ -188,39 +250,16 @@ class SOC_Exporter(SOC_BaseMixin):
             return False, None, None, "Browser closed", ErrorLevel.TERMINAL
             
         try:
-            # ✅ ADD THIS: Wait for grid data to load before extraction
+            # ✅ Wait for grid data with improved method
             if not self.wait_for_grid_data_loaded():
                 logging.warning("⚠️ Grid data may not be fully loaded, attempting extraction anyway")
             
-            script = """
-            var grid = $('#Overrides').data('kendoGrid');
-            if (!grid || !grid.dataSource) return null;
-
-            var data = grid.dataSource.data();
-            if (data.length === 0) return null;
-
-            // Match the importer's expected column order (9 columns)
-            var headers = [
-                'TagNumber', 'Description', 'OverrideType', 'OverrideMethod', 'Comment',
-                'AppliedState', 'AdditionalValueAppliedState', 'RemovedState', 'AdditionalValueRemovedState'
-            ];
-
-            var rows = data.map(item => [
-                item.TagNumber || '',
-                item.Description || '',
-                item.OverrideType ? (item.OverrideType.Title || '') : '',
-                item.OverrideMethod ? (item.OverrideMethod.Title || '') : '',
-                item.Comment || '',
-                item.OverrideAppliedState ? (item.OverrideAppliedState.Title || '') : '',
-                item.AdditionalValueAppliedState || '',
-                item.OverrideRemovedState ? (item.OverrideRemovedState.Title || '') : '',
-                item.AdditionalValueRemovedState || ''
-            ]);
-
-            return {headers: headers, rows: rows};
-            """
-
-            result = self.driver.execute_script(script)
+            # Try multiple extraction strategies
+            result = self._extract_data_strategy_primary()
+            if not result:
+                logging.info("🔄 Primary extraction failed, trying fallback strategy...")
+                result = self._extract_data_strategy_fallback()
+            
             if not result:
                 return True, [], [], "No data found in grid", ErrorLevel.RECOVERABLE
 
@@ -236,6 +275,145 @@ class SOC_Exporter(SOC_BaseMixin):
 
         except Exception as e:
             return False, None, None, f"Failed to extract data: {e}", ErrorLevel.FATAL
+
+    def _extract_data_strategy_primary(self) -> dict:
+        """
+        Primary extraction strategy using Kendo Grid data source.
+        This is the most reliable method when Kendo UI is properly initialized.
+        """
+        try:
+            script = """
+            function extractGridData() {
+                var grid = $('#Overrides').data('kendoGrid');
+                
+                // Strategy 1: Direct data source access
+                if (grid && grid.dataSource) {
+                    var data = grid.dataSource.data();
+                    if (data.length === 0) return null;
+
+                    // Match the importer's expected column order (9 columns)
+                    var headers = [
+                        'TagNumber', 'Description', 'OverrideType', 'OverrideMethod', 'Comment',
+                        'AppliedState', 'AdditionalValueAppliedState', 'RemovedState', 'AdditionalValueRemovedState'
+                    ];
+
+                    var rows = data.map(item => [
+                        item.TagNumber || '',
+                        item.Description || '',
+                        item.OverrideType ? (item.OverrideType.Title || '') : '',
+                        item.OverrideMethod ? (item.OverrideMethod.Title || '') : '',
+                        item.Comment || '',
+                        item.OverrideAppliedState ? (item.OverrideAppliedState.Title || '') : '',
+                        item.AdditionalValueAppliedState || '',
+                        item.OverrideRemovedState ? (item.OverrideRemovedState.Title || '') : '',
+                        item.AdditionalValueRemovedState || ''
+                    ]);
+
+                    return {headers: headers, rows: rows};
+                }
+                return null;
+            }
+            return extractGridData();
+            """
+            return self.driver.execute_script(script)
+        except Exception as e:
+            logging.debug(f"Primary extraction failed: {e}")
+            return None
+
+    def _extract_data_strategy_fallback(self) -> dict:
+        """
+        Fallback extraction strategy using DOM parsing.
+        Used when Kendo Grid data source is not accessible.
+        """
+        try:
+            script = """
+            function extractDomData() {
+                var grid = $('#Overrides');
+                if (grid.length === 0) return null;
+                
+                // Try to extract from visible table rows
+                var rows = grid.find('tr[data-uid]');
+                if (rows.length === 0) {
+                    // Check for no data message
+                    var noData = grid.find('.k-nodata, .no-data');
+                    if (noData.length > 0) {
+                        return {headers: [], rows: []}; // Empty grid
+                    }
+                    return null;
+                }
+                
+                // Extract headers from thead
+                var headerCells = grid.find('thead th[data-field]');
+                var headers = [];
+                headerCells.each(function() {
+                    var field = $(this).data('field');
+                    if (field) headers.push(field);
+                });
+                
+                // If no headers found, use default importer order
+                if (headers.length === 0) {
+                    headers = [
+                        'TagNumber', 'Description', 'OverrideType', 'OverrideMethod', 'Comment',
+                        'AppliedState', 'AdditionalValueAppliedState', 'RemovedState', 'AdditionalValueRemovedState'
+                    ];
+                }
+                
+                // Extract data from rows
+                var dataRows = [];
+                rows.each(function() {
+                    var row = $(this);
+                    var rowData = [];
+                    
+                    // Extract cell data
+                    row.find('td').each(function() {
+                        var cellText = $(this).text().trim();
+                        rowData.push(cellText);
+                    });
+                    
+                    if (rowData.length > 0) {
+                        dataRows.push(rowData);
+                    }
+                });
+                
+                return {headers: headers, rows: dataRows};
+            }
+            return extractDomData();
+            """
+            return self.driver.execute_script(script)
+        except Exception as e:
+            logging.debug(f"Fallback extraction failed: {e}")
+            return None
+
+    def _extract_data_strategy_ajax(self) -> dict:
+        """
+        Advanced strategy: Try to intercept or trigger AJAX data loading.
+        This can be used if the grid loads data via separate API calls.
+        """
+        try:
+            script = """
+            function triggerDataRefresh() {
+                var grid = $('#Overrides').data('kendoGrid');
+                if (grid && grid.dataSource) {
+                    // Force data refresh
+                    grid.dataSource.read().then(function() {
+                        console.log('Data refresh triggered');
+                    });
+                    return true;
+                }
+                return false;
+            }
+            return triggerDataRefresh();
+            """
+            # Trigger refresh and wait briefly
+            self.driver.execute_script(script)
+            self.driver.implicitly_wait(2)  # Brief wait for data refresh
+            
+            # Now try primary extraction again
+            return self._extract_data_strategy_primary()
+            
+        except Exception as e:
+            logging.debug(f"AJAX extraction failed: {e}")
+            return None
 
     # =========================================================================
     # EXCEL EXPORT METHODS
@@ -325,6 +503,8 @@ class SOC_Exporter(SOC_BaseMixin):
     def extract_and_export_overrides(self) -> OperationResult:
         """
         Extract overrides and export to Excel in importer-compatible format.
+        IMPROVED: Better error handling and user feedback
+        
         Returns (success, error_message, severity)
         """
         # Check browser state before export operation
@@ -332,39 +512,42 @@ class SOC_Exporter(SOC_BaseMixin):
             return False, "Browser closed", ErrorLevel.TERMINAL
             
         try:
+            # First check if overrides exist at all
+            success, error_msg, severity = self.check_if_overrides_exist()
+            if not success and severity == ErrorLevel.RECOVERABLE:
+                # Recoverable error - might still have data
+                logging.warning(f"⚠️ Overrides check issue: {error_msg}, but continuing...")
+            elif not success:
+                return False, error_msg, severity
+
+            # Extract the data
             success, headers, rows, error_msg, severity = self.extract_overrides_table_data()
             
             if not success:
                 return False, error_msg, severity
 
             if not headers or not rows:
-                msg = f"⚡  No overrides found for SOC {self.SOC_id}"
+                msg = f"⚡ No overrides found for SOC {self.SOC_id}"
                 logging.info(msg)
-                # Note: This still uses _inject_message_with_wait, see potential issue #2
-                self._inject_message_with_wait(msg, style_addons={'color': 'orange'})
+                self.inject_info_message(msg, style_addons={'color': 'orange'})
                 return True, msg, ErrorLevel.RECOVERABLE
             else:
                 success, error_msg, severity = self.create_excel_file(headers, rows)
                 if success:
                     msg = f"✅ SOC {self.SOC_id} overrides exported successfully ({len(rows)} records)"
                     logging.info(msg)
-                    # Note: This still uses _inject_message_with_wait, see potential issue #2
-                    self._inject_message_with_wait(msg, style_addons={'color': 'darkorange'})
+                    self.inject_info_message(msg, style_addons={'color': 'darkorange'})
                     return True, None, None
                 else:
                     msg = f"❌ Failed to save Excel for SOC {self.SOC_id}: {error_msg}"
-                    # Note: This still uses _inject_message_with_wait, see potential issue #2
-                    self._inject_message_with_wait(msg, style_addons={'color': 'red'})
+                    self.inject_info_message(msg, style_addons={'color': 'red'})
                     return False, msg, severity
 
         except Exception as e:
             error_msg = f"Export error: {e}"
             logging.error(f"❌ {error_msg}")
-            # Note: This still uses _inject_message_with_wait, see potential issue #2
-            self._inject_message_with_wait(f"❌ {error_msg}", style_addons={'color': 'red'})
+            self.inject_info_message(f"❌ {error_msg}", style_addons={'color': 'red'})
             return False, error_msg, ErrorLevel.FATAL
-
-
 
     # =========================================================================
     # MAIN EXECUTION WORKFLOW
@@ -373,38 +556,74 @@ class SOC_Exporter(SOC_BaseMixin):
     def run(self, standalone=False):
         """
         Main execution workflow for SOC export.
+        IMPROVED: Better error handling and user feedback throughout
         """
         if not self._initialized:
             logging.error("❌ Exporter not properly initialized")
             return
             
-        if standalone:
-            self.navigate_to_base()
-            self.enter_credentials_and_prepare_soc_input()
+        try:
+            if standalone:
+                self.navigate_to_base()
+                self.enter_credentials_and_prepare_soc_input()
+                
+                success, error_msg = self.wait_for_soc_input_and_submit()
+                if not success:
+                    if not self._handle_result(False, error_msg, ErrorLevel.FATAL):
+                        return                
+
+            # Main workflow with proper severity handling
+            logging.info(f"🚀 Starting SOC export workflow for SOC {self.SOC_id}")
             
-            success, error_msg = self.wait_for_soc_input_and_submit()
-            if not success:
-                # this is the way to use with function calls from the mixin
-                # we convert it to our error handling approach
-                if not self._handle_result(False, error_msg, ErrorLevel.FATAL):
-                    return                
-
-        # Main workflow with proper severity handling
-        
-        success, error_msg, severity = self.navigate_to_soc_details()
-        if not self._handle_result(success, error_msg, severity):
-            return
+            success, error_msg, severity = self.navigate_to_soc_details()
+            if not self._handle_result(success, error_msg, severity):
+                return
        
-        success, error_msg, severity = self.extract_and_export_overrides()
-        if not self._handle_result(success, error_msg, severity):
-            return
+            success, error_msg, severity = self.extract_and_export_overrides()
+            if not self._handle_result(success, error_msg, severity):
+                return
 
-        logging.info("🏁 SOC export completed")
+            # Final success message
+            if self.is_browser_alive():
+                self.inject_info_message(
+                    f"✅ SOC {self.SOC_id} export completed successfully!", 
+                    style_addons={'color': 'green'}
+                )
+                
+            logging.info("🏁 SOC export completed successfully")
+
+        except Exception as e:
+            logging.error(f"❌ Unhandled exception in main workflow: {e}")
+            if self.is_browser_alive():
+                self.inject_error_message(f"Export failed: {str(e)}")
+            else:
+                logging.info("🏁 Browser closed by user during export")
+
+    def run_with_retry(self, standalone=False, max_retries=2):
+        """
+        Enhanced run method with retry capability for transient failures.
+        Useful for handling occasional Kendo UI initialization issues.
+        """
+        for attempt in range(max_retries + 1):
+            try:
+                logging.info(f"🔄 Export attempt {attempt + 1}/{max_retries + 1}")
+                self.run(standalone)
+                break  # Success, exit retry loop
+            except Exception as e:
+                if attempt < max_retries:
+                    logging.warning(f"⚠️ Attempt {attempt + 1} failed, retrying: {e}")
+                    # Brief pause before retry
+                    self.driver.implicitly_wait(2)
+                else:
+                    logging.error(f"❌ All export attempts failed: {e}")
+                    if self.is_browser_alive():
+                        self.inject_error_message(f"All export attempts failed: {str(e)}")
 
 if __name__ == "__main__":
     try:
         bot = SOC_Exporter()
-        bot.run(standalone=True)
+        # Use retry version for better reliability
+        bot.run_with_retry(standalone=True)
     except Exception as e:
         print(f"❌ Failed to start exporter: {e}")
         logging.error(f"❌ Exporter startup failed: {e}")
