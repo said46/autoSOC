@@ -1,4 +1,5 @@
 // working example of changing OverrideTypeId, making OverrideMethodId to bind its dataSet, so it makes it possible next script to change OverrideMethodId
+// BUT same is not working with #OverrideTypeId, even though I can see it has items available!!!!!!!!!
 
 const new_value = '3';
 var dropdown = $('#OverrideTypeId').data('kendoDropDownList');
