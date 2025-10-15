@@ -1,0 +1,25 @@
+// working example of changing OverrideTypeId, making OverrideMethodId to bind its dataSet, so it makes it possible next script to change OverrideMethodId
+
+const new_value = '3';
+var dropdown = $('#OverrideTypeId').data('kendoDropDownList');
+if (!dropdown) {
+	console.log('Kendo dropdown not found: OverrideTypeId');
+}
+
+var oldValue = dropdown.value();
+console.log(`old value: ${oldValue}`);
+dropdown.value(new_value);
+
+if (oldValue !== new_value) {
+	dropdown.trigger('change', {
+		sender: dropdown,
+		value: new_value,
+		oldValue: oldValue
+	});
+	
+var element = $('#OverrideTypeId')[0];
+if (element) {
+	var domEvent = new Event('change', { bubbles: true });
+	element.dispatchEvent(domEvent);
+}
+}
