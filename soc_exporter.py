@@ -8,11 +8,11 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 from datetime import datetime
 
-from base_web_bot import BaseWebBot, ErrorLevel
+from base_web_bot import BaseWebBot # Removed standalone import of check_browser_alive_or_exit
 from soc_base_mixin import SOC_BaseMixin
 from error_types import ErrorLevel, OperationResult
 
-class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
+class SOC_Exporter(SOC_BaseMixin):
     """
     Specialized bot for exporting SOC overrides table to Excel.
     Exports data in the same format expected by the SOC_Importer.
@@ -75,6 +75,10 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
 
     def navigate_to_soc_details(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
+        # Check browser state before navigation
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             soc_details_url = self.base_link + f"Soc/Details/{self.SOC_id}"
             logging.info(f"🌐 Navigating to: {soc_details_url}")
@@ -101,6 +105,10 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             logging.info("✅ Successfully navigated to SOC Details with all widgets ready")
             return True, None, None
             
+        except TimeoutException:
+            error_msg = "Timeout waiting for SOC details page to load"
+            logging.error(error_msg)
+            return False, error_msg, ErrorLevel.FATAL
         except Exception as e:
             error_msg = f"Navigation failed: {e}"
             logging.error(error_msg)
@@ -110,8 +118,46 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
     # DATA EXTRACTION METHODS
     # =========================================================================
 
+    def wait_for_grid_data_loaded(self, grid_selector='#Overrides', timeout=10) -> bool:
+        """
+        Wait specifically for the Kendo grid to finish loading its data.
+        Returns True if data is loaded, False on timeout.
+        """
+        try:
+            wait = WebDriverWait(self.driver, timeout)
+            
+            # Wait for grid to have data and not be in loading state
+            def grid_data_loaded(driver):
+                try:
+                    script = f"""
+                    var grid = $('{grid_selector}').data('kendoGrid');
+                    if (!grid) return false;
+                    
+                    var dataSource = grid.dataSource;
+                    if (!dataSource) return false;
+                    
+                    // Check if data is loaded and grid is not currently loading
+                    return dataSource.data().length > 0 && !dataSource._loading;
+                    """
+                    return driver.execute_script(script)
+                except:
+                    return False
+            
+            return wait.until(grid_data_loaded)
+            
+        except TimeoutException:
+            logging.warning(f"⚠️ Timeout waiting for grid data to load after {timeout} seconds")
+            return False
+        except Exception as e:
+            logging.warning(f"⚠️ Error waiting for grid data: {e}")
+            return False
+
     def check_if_overrides_exist(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
+        # Check browser state before data extraction
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             overrides_section = self.driver.find_element(By.XPATH, "//label[contains(text(), 'Отчет по форсировкам')]")
             parent_panel = overrides_section.find_element(By.XPATH, "./ancestor::div[contains(@class, 'issow-panel')]")
@@ -137,7 +183,15 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
         TagNumber, Description, OverrideType, OverrideMethod, Comment, 
         AppliedState, AdditionalValueAppliedState, RemovedState, AdditionalValueRemovedState
         """
+        # Check browser state before data extraction
+        if not self.is_browser_alive():
+            return False, None, None, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
+            # ✅ ADD THIS: Wait for grid data to load before extraction
+            if not self.wait_for_grid_data_loaded():
+                logging.warning("⚠️ Grid data may not be fully loaded, attempting extraction anyway")
+            
             script = """
             var grid = $('#Overrides').data('kendoGrid');
             if (!grid || !grid.dataSource) return null;
@@ -176,12 +230,12 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             if headers and rows:
                 logging.info(f"✅ Extracted {len(rows)} overrides with {len(headers)} columns")
                 logging.info(f"📊 Columns: {', '.join(headers)}")
-                return True, headers, rows, None, ErrorLevel.RECOVERABLE
+                return True, headers, rows, None, None
 
             return True, [], [], "No data extracted", ErrorLevel.RECOVERABLE
 
         except Exception as e:
-            return False, [], [], f"Failed to extract data: {e}", ErrorLevel.FATAL
+            return False, None, None, f"Failed to extract data: {e}", ErrorLevel.FATAL
 
     # =========================================================================
     # EXCEL EXPORT METHODS
@@ -273,6 +327,10 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
         Extract overrides and export to Excel in importer-compatible format.
         Returns (success, error_message, severity)
         """
+        # Check browser state before export operation
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             success, headers, rows, error_msg, severity = self.extract_overrides_table_data()
             
@@ -282,6 +340,7 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             if not headers or not rows:
                 msg = f"⚡  No overrides found for SOC {self.SOC_id}"
                 logging.info(msg)
+                # Note: This still uses _inject_message_with_wait, see potential issue #2
                 self._inject_message_with_wait(msg, style_addons={'color': 'orange'})
                 return True, msg, ErrorLevel.RECOVERABLE
             else:
@@ -289,39 +348,23 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
                 if success:
                     msg = f"✅ SOC {self.SOC_id} overrides exported successfully ({len(rows)} records)"
                     logging.info(msg)
+                    # Note: This still uses _inject_message_with_wait, see potential issue #2
                     self._inject_message_with_wait(msg, style_addons={'color': 'darkorange'})
                     return True, None, None
                 else:
                     msg = f"❌ Failed to save Excel for SOC {self.SOC_id}: {error_msg}"
+                    # Note: This still uses _inject_message_with_wait, see potential issue #2
                     self._inject_message_with_wait(msg, style_addons={'color': 'red'})
                     return False, msg, severity
 
         except Exception as e:
             error_msg = f"Export error: {e}"
             logging.error(f"❌ {error_msg}")
+            # Note: This still uses _inject_message_with_wait, see potential issue #2
             self._inject_message_with_wait(f"❌ {error_msg}", style_addons={'color': 'red'})
             return False, error_msg, ErrorLevel.FATAL
 
-    # =========================================================================
-    # ERROR HANDLING AND EXECUTION CONTROL
-    # =========================================================================
 
-    def _handle_result(self, success: bool, error_msg: str | None, severity: ErrorLevel) -> bool:
-        """Handle result and return whether to continue execution"""
-        if not success:
-            if severity == ErrorLevel.TERMINAL:
-                logging.info(f"🏁 Terminal: {error_msg}")
-                self.safe_exit()
-                return False
-            elif severity == ErrorLevel.FATAL:
-                logging.error(f"💥 Fatal: {error_msg}")
-                self.inject_error_message(error_msg)
-                return False
-            else:  # RECOVERABLE
-                logging.warning(f"⚠️ Recoverable: {error_msg}")
-                # Continue execution for recoverable errors
-                return True
-        return True
 
     # =========================================================================
     # MAIN EXECUTION WORKFLOW
@@ -357,9 +400,6 @@ class SOC_Exporter(BaseWebBot, SOC_BaseMixin):
             return
 
         logging.info("🏁 SOC export completed")
-        self._inject_message_with_wait("🏁 SOC export completed", style_addons={'color': 'blue'})
-        self.safe_exit()
-
 
 if __name__ == "__main__":
     try:

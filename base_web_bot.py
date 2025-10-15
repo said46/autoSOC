@@ -1,8 +1,9 @@
+# base_web_bot.py
 from selenium import webdriver
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 import ctypes
-from typing import Union, TypedDict
+from typing import TypedDict
 from abc import abstractmethod
 
 from selenium.common.exceptions import (NoSuchWindowException, WebDriverException, TimeoutException)
@@ -21,12 +22,11 @@ def message_box(title, text, style):
     """Display a Windows message box using ctypes"""
     return ctypes.windll.user32.MessageBoxW(0, text, title, style)
 
-
 # Typed dictionary for additional CSS styles in message injection
 # total=False makes all keys optional
 class StyleAddons(TypedDict, total=False):
     color: str
-    width: Union[str, None]
+    width: str | None
     align: str
 
 
@@ -77,15 +77,14 @@ class BaseWebBot:
 
     def set_driver(self, driver):
         """Allow external driver injection for session reuse."""
-        if self.driver:
-            self.driver.quit()  # Clean up existing driver
+        # DriverManager handles quitting old driver if necessary
         self.driver = driver
 
     def safe_exit(self) -> None:
         """Clean up resources and exit safely, ensuring WebDriver is properly closed."""
         try:
             if hasattr(self, 'driver') and self.driver:
-                self.driver.quit()
+                DriverManager.quit_driver()
         except Exception as e:
             logging.error(f"❌ Error during cleanup: {str(e)}")
         finally:
@@ -101,8 +100,26 @@ class BaseWebBot:
 
     # ===== NAVIGATION METHODS =====
 
+    def check_browser_alive_or_exit(self, context: str = "") -> None:
+        """
+        Check if browser is alive. Exit safely if closed.
+
+        Args:
+            context: Optional context for logging what operation was interrupted
+        """        
+        if self.is_browser_alive():
+            if context:
+                logging.info(f"🏁 Browser closed during: {context}")
+            else:
+                logging.info("🏁 Browser closed")
+            self.safe_exit()
+
+
     def navigate_to_base(self) -> None:
         """Navigate to the base URL defined by child classes, maximizing the browser window."""
+        # Check browser state before navigation
+        self.check_browser_alive_or_exit("navigate_to_base")
+            
         try:
             self.driver.maximize_window()
             self.driver.get(self.base_link)  # Uses the abstract property
@@ -130,228 +147,76 @@ class BaseWebBot:
         try:
             _ = self.driver.current_url  # Will raise exception if browser is closed
             return False
-        except Exception:
+        except WebDriverException: # More specific exception catch
             return True
 
-    def _wait_for_browser_to_close(self, timeout=None) -> None:
-        """
-        Wait for the browser to be closed by the user with periodic status updates.
+    def is_browser_alive(self) -> bool:
+        """Public API for browser state checking"""
+        return not self._is_browser_closed()
 
-        Args:
-            timeout: Maximum time to wait in seconds (defaults to MAX_WAIT_USER_INPUT_DELAY_SECONDS)
-        """
-        if timeout is None:
-            timeout = self.MAX_WAIT_USER_INPUT_DELAY_SECONDS
-
-        try:
-            for i in range(timeout):
-                if self._is_browser_closed():
-                    logging.info("✅ Browser closed by user")
-                    break
-                # Log status every 30 seconds to avoid spam
-                if i % 30 == 0:
-                    remaining = timeout - i
-                    logging.info(f"⏳ Waiting for browser close... ({remaining}s remaining)")
-                time.sleep(1)
-            else:
-                logging.info(f"⏰ {timeout} seconds timeout reached - forcing exit")
-        finally:
+    def check_browser_alive_or_exit(self, context: str = "") -> None:
+        """Termination pattern - for void methods"""
+        if not self.is_browser_alive():
+            logging.info(f"🏁 Browser closed during: {context}")
             self.safe_exit()
+
+    def _wait_for_browser_to_close(self, timeout: int = 3600) -> bool:
+        """
+        Wait for browser to be closed by user, with proper error handling.
+        """
+        try:
+            start_time = time.time()
+            
+            while time.time() - start_time < timeout:
+                if not self.is_browser_alive():
+                    logging.info("✅ Browser closed by user")
+                    return True
+                    
+                time.sleep(1)  # Check every second
+                
+            logging.info("⏰ Timeout reached - browser still open")
+            return False
+            
+        except Exception as e:
+            logging.error(f"❌ Error waiting for browser close: {e}")
+            return False
 
     # ===== ELEMENT INTERACTION METHODS =====
 
-    def click_button(self, locator) -> bool:
+    def click_button(self, locator, timeout: int = 10) -> bool:
         """Click button with detailed error reporting"""
+        # Check browser state before interaction
+        self.check_browser_alive_or_exit("click_button")
+            
         try:
-            element = WebDriverWait(self.driver, 10).until(
+            element = WebDriverWait(self.driver, timeout).until(
                 EC.element_to_be_clickable(locator)
             )
             element.click()
             logging.info(f"✅ Successfully clicked button: {locator}")
             return True
         except TimeoutException:
-            logging.error(f"⏰ Timeout: Button {locator} not clickable after 10 seconds")
+            logging.error(f"⏰ Timeout: Button {locator} not clickable after {timeout} seconds")
             return False
         except Exception as e:
             logging.error(f"❌ Error clicking button {locator}: {str(e)}")
             return False
 
-    # ===== DOM/jQuery/Kendo elements readines =====
-    
-    def wait_for_page_fully_ready(self, 
-                                check_dom: bool = True,
-                                check_jquery: bool = True, 
-                                check_kendo: bool = True,
-                                specific_widgets: list = None,
-                                timeout: int = None) -> bool:
-        """
-        Unified method to wait for page complete readiness including Kendo widgets.
-        
-        Args:
-            check_dom: Wait for DOM ready state
-            check_jquery: Wait for jQuery
-            check_kendo: Wait for Kendo framework
-            specific_widgets: List of specific widget IDs to wait for
-            timeout: Override default timeout
-        
-        Returns:
-            bool: True if all checks pass
-        """
-        logging.info(f"""⚡ wait_for_page_fully_ready() called with 
-                        {check_dom=}, 
-                        {check_jquery=},  
-                        {check_kendo=}", 
-                        {specific_widgets=}, 
-                        {timeout=}""")
-        
-        if timeout is None:
-            timeout = self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS
+    # ===== DOM elements readiness =====
+
+    def _wait_for_element_visibility(self, element_id: str, timeout: int = 5) -> bool:
+        """Wait for element to become visible."""
+        # Check browser state before waiting
+        self.check_browser_alive_or_exit("_wait_for_element_visibility")
             
         try:
-            wait = WebDriverWait(self.driver, timeout)
-            
-            # Step 1: DOM Ready (if requested)
-            if check_dom:
-                logging.info("⏳ Waiting for DOM ready state...")
-                wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-            
-            # Step 2: jQuery (if requested)
-            if check_jquery:
-                logging.info("⏳ Waiting for jQuery...")
-                wait.until(lambda d: d.execute_script("return typeof jQuery !== 'undefined'"))
-            
-            # Step 3: Kendo Framework (if requested)
-            if check_kendo:
-                logging.info("⏳ Waiting for Kendo framework...")
-                wait.until(lambda d: d.execute_script("return typeof kendo !== 'undefined'"))
-            
-            # Step 4: Specific Widgets (if provided)
-            if specific_widgets:
-                for widget_id in specific_widgets:
-                    logging.info(f"⏳ Waiting for widget: {widget_id}...")
-                    wait.until(self._widget_ready_condition(widget_id))
-            
-            # Step 5: Default Kendo widgets (if none specified)
-            elif check_kendo:
-                logging.info("⏳ Waiting for default Kendo widgets...")
-                wait.until(self._default_widgets_ready())
-            
-            logging.info("✅ Page fully ready with all widgets loaded")
+            WebDriverWait(self.driver, timeout).until(
+                EC.visibility_of_element_located((By.ID, element_id))
+            )
             return True
-            
-        except TimeoutException as e:
-            logging.error(f"⏰ Timeout waiting for page readiness: {str(e)}")
+        except TimeoutException:
             return False
-        except Exception as e:
-            logging.error(f"❌ Error waiting for page readiness: {str(e)}")
-            return False
-
-    def _widget_ready_condition(self, widget_id: str):
-        """Create wait condition for specific widget type."""
-        
-        class WidgetReady:
-            def __init__(self, widget_id, driver):
-                self.widget_id = widget_id
-                self.driver = driver
-                
-            def __call__(self, driver):
-                try:
-                    # Detect widget type and check accordingly
-                    result = self.driver.execute_script(f"""
-                        try {{
-                            var element = $('#{self.widget_id}');
-                            if (!element.length) return false;
-                            
-                            // Check for Kendo Grid
-                            var grid = element.data('kendoGrid');
-                            if (grid) {{
-                                return grid.dataSource && 
-                                       grid.dataSource.data().length > 0 &&
-                                       !grid.dataSource._loading;
-                            }}
-                            
-                            // Check for Kendo DropDown
-                            var dropdown = element.data('kendoDropDownList');
-                            if (dropdown) {{
-                                return dropdown.dataSource && 
-                                       dropdown.dataItems().length > 0;
-                            }}
-                            
-                            // Default: just check if widget exists
-                            return element.data('kendoWidget') !== undefined;
-                            
-                        }} catch (e) {{
-                            console.log('Widget check error:', e);
-                            return false;
-                        }}
-                    """)
-                    return result
-                except:
-                    return False
-        
-        return WidgetReady(widget_id, self.driver)
-
-    def _default_widgets_ready(self):
-        """Wait condition for commonly used Kendo widgets."""
-        
-        class DefaultWidgetsReady:
-            def __init__(self, driver):
-                self.driver = driver
-                
-            def __call__(self, driver):
-                try:
-                    result = self.driver.execute_script("""
-                        try {
-                            // Common Kendo widgets to check
-                            var widgets = [
-                                {id: 'Overrides', type: 'grid'},
-                                {id: 'ActionsList', type: 'dropdown'},
-                                {id: 'CurrentRoleName', type: 'dropdown'},
-                                {id: 'OverrideTypeId', type: 'dropdown'},
-                                {id: 'OverrideMethodId', type: 'dropdown'},
-                                {id: 'OverrideAppliedStateId', type: 'dropdown'},
-                                {id: 'OverrideRemovedStateId', type: 'dropdown'}
-                            ];
-                            
-                            for (var i = 0; i < widgets.length; i++) {
-                                var widget = widgets[i];
-                                var element = $('#' + widget.id);
-                                
-                                if (!element.length) {
-                                    // Element doesn't exist on this page, skip
-                                    continue;
-                                }
-                                
-                                if (widget.type === 'grid') {
-                                    var grid = element.data('kendoGrid');
-                                    if (!grid || !grid.dataSource || grid.dataSource._loading) {
-                                        return false;
-                                    }
-                                    // For grids, require at least empty data array
-                                    if (!grid.dataSource.data()) {
-                                        return false;
-                                    }
-                                }
-                                else if (widget.type === 'dropdown') {
-                                    var dropdown = element.data('kendoDropDownList');
-                                    if (!dropdown || !dropdown.dataSource) {
-                                        return false;
-                                    }
-                                }
-                            }
-                            return true;
-                            
-                        } catch (e) {
-                            console.log('Default widgets check error:', e);
-                            return false;
-                        }
-                    """)
-                    return result
-                except:
-                    return False
-        
-        return DefaultWidgetsReady(self.driver)
-
+    
     # ===== MESSAGE INJECTION METHODS =====
 
     def inject_error_message(self, msg_text: str, locator: tuple[str, str] = None,
@@ -366,6 +231,9 @@ class BaseWebBot:
             locator: Optional tuple (By.XPATH, xpath) to position message relative to an element
             style_addons: Optional CSS style overrides
         """
+        # Check browser state before message injection
+        self.check_browser_alive_or_exit("inject_error_message")
+            
         if style_addons is None:
             style_addons = self.default_style_addons
         msg_text = msg_text + self.ERROR_MESSAGE_ENDING
@@ -383,28 +251,40 @@ class BaseWebBot:
             locator: Optional tuple (By.XPATH, xpath) to position message relative to an element
             style_addons: Optional CSS style overrides
         """
+        # Check browser state before message injection
+        self.check_browser_alive_or_exit("inject_info_message")
+            
         if style_addons is None:
             style_addons = self.default_style_addons
         self._inject_message(msg_text, locator, style_addons)
 
-    def _inject_message_with_wait(self, msg_text: str, locator: tuple[str, str] = None,
-                                 style_addons: StyleAddons = None) -> None:
+    def _inject_message_with_wait(self, message: str, element_locator: tuple = None, 
+                                style_addons: dict = None, wait_timeout: int = None) -> bool:
         """
-        Internal method to inject message and wait for browser closure.
-
-        Used for error scenarios where user intervention is required.
+        Inject message and wait for browser close, with built-in browser state checking.
         """
-        if style_addons is None:
-            style_addons = self.default_style_addons
-        self._inject_message(msg_text, locator, style_addons)
-
-        # Wait for browser closure only for error messages
-        if self._is_browser_closed():
-            logging.info("✅ Browser already closed - instant exit")
-            self.safe_exit()
-        else:
-            logging.info(f"⏳ Browser open - waiting up to {self.MAX_WAIT_USER_INPUT_DELAY_SECONDS} seconds for user to close it")
-            self._wait_for_browser_to_close()
+        # Check browser state first
+        if not self.is_browser_alive():
+            logging.info("ℹ️ Browser already closed - skipping message injection")
+            return False
+            
+        try:
+            # Inject the message
+            if not self._inject_message(message, element_locator, style_addons):
+                return False
+                
+            # Set default timeout if not provided
+            if wait_timeout is None:
+                wait_timeout = self.MAX_WAIT_USER_INPUT_DELAY_SECONDS
+                
+            logging.info(f"⏳ Browser open - waiting up to {wait_timeout} seconds for user to close it")
+            
+            # Wait for browser to close with periodic state checks
+            return self._wait_for_browser_to_close(wait_timeout)
+            
+        except Exception as e:
+            logging.error(f"❌ Message injection with wait failed: {e}")
+            return False
 
     def _inject_message(self, msg_text: str, locator: tuple[str, str] = None,
                        style_addons: StyleAddons = None) -> None:
@@ -416,6 +296,9 @@ class BaseWebBot:
             locator: Optional tuple for relative positioning
             style_addons: Optional CSS style customization
         """
+        # Check browser state before DOM manipulation
+        self.check_browser_alive_or_exit("_inject_message")
+            
         if style_addons is None:
             style_addons = self.default_style_addons
 
@@ -463,6 +346,15 @@ class BaseWebBot:
         width = style_addons.get('width')  # Returns None if key missing
         align = style_addons.get('align', self.default_style_addons['align'])
 
+        # Sanitize msg_text for use in JS string literal (basic escaping)
+        # Using repr() and slicing off the quotes is a common way for simple strings.
+        # For more complex data, json.dumps(msg_text) is often safer.
+        import json
+        escaped_msg_text = json.dumps(msg_text)[1:-1] # Remove surrounding quotes from json string
+
+        # Sanitize xpath for use in JS string literal (basic escaping)
+        escaped_xpath = json.dumps(xpath)[1:-1] if xpath is not None else ""
+
         # Build conditional width CSS
         width_css = f"width: {width};" if width else ""
 
@@ -484,7 +376,7 @@ class BaseWebBot:
                     text-align: {align};
                     {width_css}
                 `;
-                div.textContent = `{msg_text}`;
+                div.textContent = `{escaped_msg_text}`;
                 document.body.appendChild(div);
             """
         else:
@@ -499,7 +391,7 @@ class BaseWebBot:
                         null
                     ).singleNodeValue;
                 }}
-                const parent_element = getElementByXpath(`{xpath}`) || document.body;
+                const parent_element = getElementByXpath(`{escaped_xpath}`) || document.body;
                 const div = document.createElement('div');
                 div.style.cssText = `
                     font-size: 14px;
@@ -510,6 +402,6 @@ class BaseWebBot:
                     text-align: {align};
                     {width_css}
                 `;
-                div.textContent = `{msg_text}`;
+                div.textContent = `{escaped_msg_text}`;
                 parent_element.insertBefore(div, parent_element.firstChild);
             """

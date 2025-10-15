@@ -1,6 +1,6 @@
 # soc_controller.py
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import (NoSuchElementException, NoSuchWindowException)
+from selenium.common.exceptions import (NoSuchElementException, TimeoutException)
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
@@ -8,12 +8,12 @@ from selenium.webdriver.support.ui import Select
 import configparser
 import logging
 
-from base_web_bot import BaseWebBot
+from base_web_bot import BaseWebBot # Removed standalone import of check_browser_alive_or_exit
 from soc_base_mixin import SOC_BaseMixin
 from error_types import ErrorLevel, OperationResult
 
 
-class SOC_Controller(BaseWebBot, SOC_BaseMixin):
+class SOC_Controller(SOC_BaseMixin):
     """
     Specialized bot for SOC overrides automation.
     """
@@ -121,6 +121,10 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
     def get_SOC_status(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
+        # Check browser state before status check
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         script = """
             return document.evaluate(
                 "//label[normalize-space()='Состояние']/following-sibling::text()[1]",
@@ -142,6 +146,10 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
     def get_current_role(self) -> tuple[bool, str | None, ErrorLevel]:
         """Returns (success, role_or_error, severity)"""
+        # Check browser state before role check
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             role_span = self.driver.find_element(By.XPATH, "//span[@class='k-state-active' and contains(text(), 'Роль:')]")
             role_text = role_span.text.strip()
@@ -151,7 +159,8 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
                 logging.info(f"👤 Current role: '{role_name}'")
                 return True, role_name, ErrorLevel.RECOVERABLE
             else:
-                return False, f"Unexpected role format: '{role_name}'", ErrorLevel.RECOVERABLE
+                # Fixed: Use role_text instead of undefined role_name
+                return False, f"Unexpected role format: '{role_text}'", ErrorLevel.RECOVERABLE
 
         except NoSuchElementException:
             return False, "Role span not found", ErrorLevel.RECOVERABLE
@@ -160,6 +169,10 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
     def switch_role(self, role: str) -> OperationResult:
         """Returns (success, error_message, severity)"""
+        # Check browser state before role switch
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             # Check current role
             success, current_role_or_error, severity = self.get_current_role()
@@ -192,8 +205,6 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             logging.info(f"✅ Switched to {role} role")
             return True, None, None
 
-        except NoSuchWindowException:
-            return False, "Browser closed during role switch", ErrorLevel.TERMINAL
         except Exception as e:
             return False, f"Failed to switch role to {role}: {str(e)}", ErrorLevel.FATAL
 
@@ -203,6 +214,10 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
     def accept_SOC_to_apply(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
+        # Check browser state before SOC acceptance
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             # Get current status
             success, error_msg, severity = self.get_SOC_status()
@@ -250,19 +265,25 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
             logging.info(f"✅ SOC accepted - new status: '{self.SOC_status}'")
             return True, None, None
 
-        except NoSuchWindowException:
-            return False, "Browser closed during SOC acceptance", ErrorLevel.TERMINAL
         except Exception as e:
             return False, f"Failed to accept SOC {self.SOC_id}: {str(e)}", ErrorLevel.FATAL
 
     def update_points(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
+        # Check browser state before updating points
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             item_xpath = f"//select[@id='CurrentStateSelect' and not(@disabled)]"
             sel_items = self.driver.find_elements(By.XPATH, item_xpath)
             logging.info(f"Updating {len(sel_items)} points")
 
             for point_index, sel_item in enumerate(sel_items, start=1):
+                # ✅ FIX: Use simple browser check, not check_browser_alive_or_exit
+                if not self.is_browser_alive():
+                    return False, "Browser closed during points update", ErrorLevel.TERMINAL
+                    
                 drop = Select(sel_item)
                 if len(drop.options) > 1:
                     drop.select_by_index(self.FINAL_STATE_DROPDOWN_INDEX)
@@ -279,6 +300,10 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
     def navigate_to_soc_and_check_status(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
+        # Check browser state before navigation
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             SOC_view_base_link = self._base_link + r"Soc/Details/"
             self.driver.get(SOC_view_base_link + self.SOC_id)
@@ -329,15 +354,21 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
             return True, None, None
 
-        except NoSuchWindowException:
-            return False, "Browser closed during navigation", ErrorLevel.TERMINAL
         except Exception as e:
             return False, f"Navigation to SOC failed: {str(e)}", ErrorLevel.FATAL
 
     def process_soc_roles(self) -> OperationResult:
         """Returns (success, error_message, severity)"""
+        # Check browser state before role processing
+        if not self.is_browser_alive():
+            return False, "Browser closed", ErrorLevel.TERMINAL
+            
         try:
             for SOC_role in self.SOC_roles:
+                # ✅ FIX: Use simple browser check, not check_browser_alive_or_exit
+                if not self.is_browser_alive():
+                    return False, "Browser closed during role processing", ErrorLevel.TERMINAL
+                    
                 # Switch role
                 success, error_msg, severity = self.switch_role(SOC_role)
                 if not success:
@@ -368,8 +399,6 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
 
             return True, None, None
 
-        except NoSuchWindowException:
-            return False, "Browser closed during role processing", ErrorLevel.TERMINAL
         except Exception as e:
             return False, f"Failed to process SOC roles: {str(e)}", ErrorLevel.FATAL
 
@@ -377,41 +406,40 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
     # USER INTERACTION METHODS
     # =========================================================================
 
-    def wait_for_user_confirmation(self):
-        msg = '⚠️  Скрипт ожидает нажатия кнопки "Подтвердить".'
-        xpath = "//div[@id='bottomWindowButtons']/div"
-        self.inject_info_message(msg, (By.XPATH, xpath), {'color': 'lawngreen'})
+    def wait_for_user_confirmation(self) -> OperationResult:
+        """Returns (success, error_message, severity)"""
+        # Check browser state before waiting for confirmation
+        if not self.is_browser_alive():
+            return True, "Browser already closed by user", ErrorLevel.RECOVERABLE
+            
         try:
+            msg = '⚠️  Скрипт ожидает нажатия кнопки "Подтвердить".'
+            xpath = "//div[@id='bottomWindowButtons']/div"
+            
+            # ✅ FIX: Use _inject_message which returns bool, not tuple
+            success = self._inject_message(msg, (By.XPATH, xpath), {'color': 'lawngreen'})
+            if not success:
+                logging.warning("⚠️ Failed to inject confirmation message, but continuing...")
+            
             WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
                 EC.title_is(self.EXPECTED_HOME_PAGE_TITLE)
             )
             logging.info("🏁 Confirm pressed, home page loaded")
-        except NoSuchWindowException:
-            logging.error("⚠️ User closed browser")
-            self.safe_exit()
+            return True, None, None
+            
+        except TimeoutException:
+            # Timeout is normal - user didn't press confirm within the time limit
+            if not self.is_browser_alive():
+                return True, "Browser closed by user during confirmation wait", ErrorLevel.RECOVERABLE
+            return True, "User confirmation timeout - continuing anyway", ErrorLevel.RECOVERABLE
+            
         except Exception as e:
-            return False, f"Failed waiting for confirm: {str(e)}", ErrorLevel.FATAL
-
-    # =========================================================================
-    # ERROR HANDLING AND EXECUTION CONTROL
-    # =========================================================================
-
-    def _handle_result(self, success: bool, error_msg: str | None, severity: ErrorLevel) -> bool:
-        """Handle result and return whether to continue execution"""
-        if not success:
-            if severity == ErrorLevel.TERMINAL:
-                logging.info(f"🏁 Terminal: {error_msg}")
-                self.safe_exit()
-                return False
-            elif severity == ErrorLevel.FATAL:
-                logging.error(f"💥 Fatal: {error_msg}")
-                self.inject_error_message(error_msg)
-                return False
-            else:  # RECOVERABLE
-                logging.warning(f"⚠️ Recoverable: {error_msg}")
-                # Continue execution for recoverable errors
-                return True
-        return True
+            # If browser closed during wait, that's normal user behavior
+            if not self.is_browser_alive():
+                return True, "Browser closed by user during confirmation wait", ErrorLevel.RECOVERABLE
+            error_msg = f"Failed waiting for confirm: {e}"
+            logging.error(error_msg)
+            return False, error_msg, ErrorLevel.FATAL
 
     # =========================================================================
     # MAIN EXECUTION WORKFLOW
@@ -442,9 +470,6 @@ class SOC_Controller(BaseWebBot, SOC_BaseMixin):
         if not self._handle_result(success, error_msg, severity):
             return
             
-        self.safe_exit()
-
-
 if __name__ == "__main__":
     try:
         bot = SOC_Controller()

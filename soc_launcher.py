@@ -7,15 +7,14 @@ import base64
 import os
 
 from base_web_bot import BaseWebBot
-from soc_base_mixin import SOC_BaseMixin
+from soc_base_mixin import SOC_BaseMixin, WaitForSOCInput
 from error_types import ErrorLevel, OperationResult
 
 from soc_controller import SOC_Controller
 from soc_exporter import SOC_Exporter
 from soc_importer import SOC_Importer
 
-
-class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
+class SOC_Launcher(SOC_BaseMixin):
     """
     Launcher for SOC bots with common login/SOC input functionality
     and radio button selection between control, export, and import.
@@ -32,8 +31,10 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
         
         # Load configuration with proper error handling
         success, error_msg, severity = self.load_configuration()
-        if not self._handle_result(success, error_msg, severity):
-            return
+        if not success:
+            logging.error(f"❌ Launcher initialization failed: {error_msg}")
+            print(f"❌ FATAL: {error_msg}")
+            raise RuntimeError(f"Launcher initialization failed: {error_msg}")
             
         self._initialized = True
 
@@ -76,24 +77,6 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
     @property
     def base_link(self) -> str:
         return self._base_link
-
-    def _handle_result(self, success: bool, error_msg: str | None, severity: ErrorLevel) -> bool:
-        """Handle result and return whether to continue execution"""
-        if not success:
-            if severity == ErrorLevel.TERMINAL:
-                logging.info(f"🏁 Terminal: {error_msg}")
-                self.safe_exit()
-                return False
-            elif severity == ErrorLevel.FATAL:
-                logging.error(f"💥 Fatal: {error_msg}")
-                # Can't use inject_error_message here - browser not ready yet
-                print(f"❌ FATAL: {error_msg}")
-                return False
-            else:  # RECOVERABLE
-                logging.warning(f"⚠️ Recoverable: {error_msg}")
-                # Continue execution for recoverable errors
-                return True
-        return True
 
     def inject_bot_selection(self) -> None:
         """
@@ -274,13 +257,13 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
         Returns (success, error_message, severity)
         """
         try:
-            # Wait for valid SOC ID input with timeout
+            # ✅ FIX: Use WaitForSOCInput class directly from the imported module
             WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
-                self.WaitForSOCInput((By.ID, "InjectedInput"), self)
+                WaitForSOCInput((By.ID, "InjectedInput"), self)  # ✅ Use imported class
             )
 
-            # If browser closed, exit
-            if self._is_browser_closed():
+            # ✅ FIX: Check browser state AFTER wait completes
+            if not self.is_browser_alive():
                 error_msg = "🏁 Browser closed by user during input"
                 logging.info(error_msg)
                 return False, error_msg, ErrorLevel.TERMINAL
@@ -344,6 +327,10 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
         try:
             logging.info(f"🚀 Launching {self.selected_bot} bot for SOC {self.SOC_id}")
 
+            # ✅ FIX: Check browser state before launching bot
+            if not self.is_browser_alive():
+                return False, "Browser closed before bot launch", ErrorLevel.TERMINAL
+
             # a small pause to let driver stabilize
             import time
             time.sleep(0.3)
@@ -393,11 +380,11 @@ class SOC_Launcher(BaseWebBot, SOC_BaseMixin):
             if not self._handle_result(success, error_msg, severity):
                 return
 
+            logging.info("🏁 Launcher workflow completed")
+
         except Exception as e:
             logging.error(f"❌ Launcher execution failed: {str(e)}")
             self.inject_error_message(f"❌ Launcher execution failed: {str(e)}")
-            self.safe_exit()
-
 
 if __name__ == "__main__":
     try:
