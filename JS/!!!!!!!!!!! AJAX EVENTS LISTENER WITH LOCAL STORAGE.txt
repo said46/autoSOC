@@ -1,0 +1,143 @@
+// Bookmarklet Version (CSP Bypass):
+// Create a new bookmark in Chrome
+// Name it: "AJAX Logger"
+// URL: Paste this code:
+
+// ================= minimalistic version ======================
+javascript:(function(){
+    if(!window.ajaxLogs){window.ajaxLogs=[];}
+    try{var stored=localStorage.getItem('ajaxLogs');
+        if(stored){window.ajaxLogs=JSON.parse(stored);}
+    }catch(e){}
+    if(!window.ajaxMonitorActive){
+        window.ajaxMonitorActive=true;
+        $(document).ajaxComplete(function(e,xhr,settings){
+            var log={timestamp:new Date().toISOString(),url:settings.url,method:settings.type,status:xhr.status};
+            window.ajaxLogs.push(log);
+            console.log("🔍 AJAX:",settings.url,"Method:",settings.type,"Status:",xhr.status);
+            try{localStorage.setItem('ajaxLogs',JSON.stringify(window.ajaxLogs));}catch(e){}
+        });
+        console.log('✅ AJAX Logger Active. Logs:',window.ajaxLogs.length);
+    }
+    console.log('Commands: ajaxLogs, localStorage.getItem("ajaxLogs")');
+})();
+
+// ================= light UI version ======================
+javascript:(function(){
+    if(!window.ajaxLogs){window.ajaxLogs=[];}
+    try{var stored=localStorage.getItem('ajaxLogs');
+        if(stored){window.ajaxLogs=JSON.parse(stored);}
+    }catch(e){}
+    if(!window.ajaxMonitorActive){
+        window.ajaxMonitorActive=true;
+        $(document).ajaxComplete(function(e,xhr,settings){
+            var log={timestamp:new Date().toISOString(),url:settings.url,method:settings.type,status:xhr.status};
+            window.ajaxLogs.push(log);
+            updateUI();
+            console.log("🔍 AJAX:",settings.url,"Method:",settings.type,"Status:",xhr.status);
+            try{localStorage.setItem('ajaxLogs',JSON.stringify(window.ajaxLogs));}catch(e){}
+        });
+        createUI();
+        console.log('✅ AJAX Logger Active. Logs:',window.ajaxLogs.length);
+    }
+    function createUI(){
+        if(document.getElementById('ajax-logger-ui')) return;
+        var ui=document.createElement('div');
+        ui.id='ajax-logger-ui';
+        ui.innerHTML='<div id="ajax-logger-header" style="position:fixed;top:10px;right:10px;background:#000;color:#fff;padding:8px 12px;border-radius:4px;font-family:monospace;cursor:pointer;z-index:10000;">AJAX Logger (<span id="log-count">0</span>)</div><div id="ajax-logger-content" style="display:none;position:fixed;top:50px;right:10px;width:400px;height:300px;background:#fff;border:1px solid #ccc;border-radius:4px;overflow:auto;z-index:10000;"><div id="logs-container" style="font-family:monospace;font-size:12px;"></div></div>';
+        document.body.appendChild(ui);
+        document.getElementById('ajax-logger-header').onclick=function(){
+            var content=document.getElementById('ajax-logger-content');
+            content.style.display=content.style.display==='block'?'none':'block';
+        };
+    }
+    function updateUI(){
+        var countEl=document.getElementById('log-count');
+        if(countEl) countEl.textContent=window.ajaxLogs.length;
+        var container=document.getElementById('logs-container');
+        if(container){
+            var lastLog=window.ajaxLogs[window.ajaxLogs.length-1];
+            var logEl=document.createElement('div');
+            logEl.style.padding='4px';
+            logEl.style.borderBottom='1px solid #eee';
+            logEl.innerHTML='<span style="color:'+getStatusColor(lastLog.status)+';">['+lastLog.status+']</span> '+lastLog.method+' '+lastLog.url;
+            container.insertBefore(logEl,container.firstChild);
+        }
+    }
+    function getStatusColor(status){
+        if(status>=200&&status<300) return 'green';
+        if(status>=300&&status<400) return 'blue';
+        if(status>=400&&status<500) return 'orange';
+        if(status>=500) return 'red';
+        return 'gray';
+    }
+    updateUI();
+    console.log('Commands: ajaxLogs, localStorage.getItem("ajaxLogs")');
+})();
+
+// ================= UI version with buttons ======================
+javascript:(function(){
+    if(!window.ajaxLogs){window.ajaxLogs=[];}
+    try{var stored=localStorage.getItem('ajaxLogs');
+        if(stored){window.ajaxLogs=JSON.parse(stored);}
+    }catch(e){}
+    if(!window.ajaxMonitorActive){
+        window.ajaxMonitorActive=true;
+        $(document).ajaxComplete(function(e,xhr,settings){
+            var log={timestamp:new Date().toISOString(),url:settings.url,method:settings.type,status:xhr.status};
+            window.ajaxLogs.push(log);
+            updateUI();
+            console.log("🔍 AJAX:",settings.url,"Method:",settings.type,"Status:",xhr.status);
+            try{localStorage.setItem('ajaxLogs',JSON.stringify(window.ajaxLogs));}catch(e){}
+        });
+        createUI();
+        console.log('✅ AJAX Logger Active. Logs:',window.ajaxLogs.length);
+    }
+    function createUI(){
+        if(document.getElementById('ajax-logger-ui')) return;
+        var ui=document.createElement('div');
+        ui.id='ajax-logger-ui';
+        ui.innerHTML='<div id="ajax-logger-header" style="position:fixed;top:10px;right:10px;background:#000;color:#fff;padding:8px 12px;border-radius:4px;font-family:monospace;cursor:pointer;z-index:10000;">AJAX Logger (<span id="log-count">0</span>)</div><div id="ajax-logger-content" style="display:none;position:fixed;top:50px;right:10px;width:600px;height:400px;background:#fff;border:1px solid #ccc;border-radius:4px;overflow:hidden;z-index:10000;"><div style="padding:8px;background:#f5f5f5;border-bottom:1px solid #ccc;"><button id="save-logs-btn" style="margin-right:8px;padding:4px 8px;">💾 Save</button><button id="clear-logs-btn" style="padding:4px 8px;">🗑️ Clear</button></div><div id="logs-container" style="height:calc(100% - 40px);overflow:auto;font-family:monospace;font-size:12px;"></div></div>';
+        document.body.appendChild(ui);
+        document.getElementById('ajax-logger-header').onclick=function(){
+            var content=document.getElementById('ajax-logger-content');
+            content.style.display=content.style.display==='block'?'none':'block';
+        };
+        document.getElementById('save-logs-btn').onclick=function(){
+            var dataStr='data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(window.ajaxLogs,null,2));
+            var dl=document.createElement('a');
+            dl.href=dataStr;
+            dl.download='ajax-logs.json';
+            dl.click();
+        };
+        document.getElementById('clear-logs-btn').onclick=function(){
+            window.ajaxLogs=[];
+            try{localStorage.removeItem('ajaxLogs');}catch(e){}
+            updateUI();
+        };
+    }
+    function updateUI(){
+        var countEl=document.getElementById('log-count');
+        if(countEl) countEl.textContent=window.ajaxLogs.length;
+        var container=document.getElementById('logs-container');
+        if(container){
+            container.innerHTML='';
+            window.ajaxLogs.slice().reverse().forEach(function(log){
+                var logEl=document.createElement('div');
+                logEl.style.padding='6px';
+                logEl.style.borderBottom='1px solid #eee';
+                logEl.innerHTML='<div style="color:'+getStatusColor(log.status)+';">['+log.status+']</div><div style="font-size:10px;color:#888;">'+log.timestamp+'</div><div>'+log.method+' '+log.url+'</div>';
+                container.appendChild(logEl);
+            });
+        }
+    }
+    function getStatusColor(status){
+        if(status>=200&&status<300) return 'green';
+        if(status>=300&&status<400) return 'blue';
+        if(status>=400&&status<500) return 'orange';
+        if(status>=500) return 'red';
+        return 'gray';
+    }
+    updateUI();
+    console.log('Commands: ajaxLogs, localStorage.getItem("ajaxLogs")');
+})();
