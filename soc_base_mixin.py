@@ -11,59 +11,39 @@ import configparser
 
 from soc_DB import SQLQueryDirect
 from error_types import ErrorLevel, OperationResult
-from base_web_bot import BaseWebBot # Import BaseWebBot to make the dependency clear
+from base_web_bot import BaseWebBot
 
 class WaitForSOCInput:
     """
     Custom wait condition for monitoring SOC ID input field.
-
-    This class implements the __call__ method to be used with WebDriverWait.
-    It monitors the input field for changes and Enter key presses, validating
-    the input in real-time and updating the UI accordingly.
+    Handles user browser closure gracefully.
     """
 
     def __init__(self, locator, soc_mixin):
-        """
-        Initialize the wait condition.
-
-        Args:
-            locator: Tuple (By strategy, value) to locate the input field
-            soc_mixin: Reference to the SOC_BaseMixin instance for validation
-        """
         self.locator = locator
         self.soc_mixin = soc_mixin
-        self.last_value = ""  # Track previous value to detect changes
+        self.last_value = ""
 
     def __call__(self, driver):
-        """
-        Called repeatedly by WebDriverWait until condition is met or timeout.
-
-        Returns:
-            True if valid SOC ID entered and Enter pressed, False to continue waiting
-        """
         try:
-            # Browser closure check - stop waiting if browser closed
-            if self.soc_mixin._is_browser_closed():
-                return True
+            # Respect user's ability to close browser at any time
+            if not self.soc_mixin.is_browser_alive():
+                return True  # Break wait if browser closed
 
             injected_input = driver.find_element(*self.locator)
             current_value = injected_input.get_attribute("value")
 
-            # Validate and update UI on value change
             if current_value != self.last_value:
                 is_valid, message = self.soc_mixin._validate_soc_input(current_value)
                 self.soc_mixin._update_input_ui(is_valid, message)
                 self.last_value = current_value
 
-            # Check if Enter key was pressed
             enter_pressed = injected_input.get_attribute('data-enter-pressed') == 'true'
-            # Simplified condition: only check for Enter press and validity
             if enter_pressed:
                 is_valid, message = self.soc_mixin._validate_soc_input(current_value)
                 self.soc_mixin._update_input_ui(is_valid, message)
 
                 if is_valid:
-                    # Valid input - disable field and proceed
                     driver.execute_script("""
                         var input = document.getElementById('InjectedInput');
                         input.removeAttribute('data-enter-pressed');
@@ -71,7 +51,6 @@ class WaitForSOCInput:
                     """)
                     return True
                 else:
-                    # Invalid input - show error and reset Enter flag
                     self.soc_mixin._update_input_ui(False, "❌ Invalid - " + message.split('⚠️ ')[-1])
                     driver.execute_script("""
                         var input = document.getElementById('InjectedInput');
@@ -80,8 +59,7 @@ class WaitForSOCInput:
 
             return False
         except (NoSuchWindowException, WebDriverException):
-            # Browser closed - return True to break the wait
-            return True
+            return True  # Browser closed - break wait
 
 class WidgetReady:
     """
@@ -92,16 +70,13 @@ class WidgetReady:
         self.widget_id = widget_id
 
     def __call__(self, driver):
-        """
-        Check if widget is ready.
-        """
         try:
-            # Debug: Check what's actually on the page
+            # Check browser state first
             debug_info = driver.execute_script(f"""
                 try {{
                     var element = document.getElementById('{self.widget_id}');
                     var exists = !!element;
-                    var kendoWidget = exists ? $(element).data('kendoWidget') : null;
+                    var kendoWidget = exists ? $(element).data('kendoDropDownList') : null;
                     var widgetType = kendoWidget ? kendoWidget.toString() : 'none';
                     var hasDataSource = kendoWidget && kendoWidget.dataSource;
                     var isLoading = hasDataSource ? kendoWidget.dataSource._loading : false;
@@ -119,72 +94,202 @@ class WidgetReady:
             logging.error(f"❌ Widget check exception for {self.widget_id}: {e}")
             return False
 
-class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
+class SOC_BaseMixin(BaseWebBot):
     """
-    Mixin class that provides SOC ID input functionality, password processing, and login logic.
-
-    This mixin is designed to be combined with BaseWebBot to add SOC-specific functionality:
-    - SOC ID input field injection and validation
-    - Password decoding and credential entry
-    - Login form submission with SOC ID
-    - Database lookup for partial SOC IDs
-    - Various security and access checks
-
-    Expected to be used with web applications that require SOC number authentication.
+    Enhanced mixin class with user-centric SOC automation.
+    
+    Maintains core principles:
+    - Browser always under user control
+    - User can close browser at any time
+    - All communication via HTML injection
+    - Graceful handling of browser closure
     """
 
     EXPECTED_HOME_PAGE_TITLE = "СНД - Домашняя страница"
 
     def __init__(self):
-        """
-        Initialize SOC mixin with default configuration.
-
-        Note: Child classes should override these attributes as needed.
-        """
-        # Ensure BaseWebBot's __init__ is called first to set up driver, etc.
-        # This happens implicitly when SOC_BaseMixin is inherited by the final class
-        # and that class calls super().__init__(), which eventually calls BaseWebBot.__init__().
-        # If SOC_BaseMixin needs to directly call BaseWebBot's __init__ if it were standalone,
-        # it would use: BaseWebBot.__init__(self)
-        # But since it's a mixin, the inheriting class (e.g., SOC_Exporter) handles the chain.
-
-        # These should be set by the child class
+        super().__init__()  # Ensure BaseWebBot is properly initialized
         self.CONNECT_TO_DB_FOR_PARTIAL_SOC_ID = False
-        self.SOC_ID_PATTERN = r"^\d{7,8}$"  # Regex pattern for SOC ID validation
+        self.SOC_ID_PATTERN = r"^\d{7,8}$"
         self.ERROR_MESSAGE_ENDING = ", the script cannot proceed, close this window."
-        self.config_file = 'SOC.ini'  # Default configuration file
-        self.SOC_id = ''  # Initialized for safety
+        self.config_file = 'SOC.ini'
+        self.SOC_id = ''
 
-    # ===== ERROR HANDLING =====
+    # ===== ENHANCED KENDO WIDGET METHODS =====
+
+    def _wait_for_kendo_widget_ready(self, widget_id: str, timeout: int = 10) -> bool:
+        """
+        Wait for Kendo widget to be fully initialized and ready.
+        Returns False if browser closed by user during wait.
+        """
+        if not self.safe_browser_operation("Kendo widget wait"):
+            return False
+            
+        try:
+            return WebDriverWait(self.driver, timeout).until(
+                lambda driver: driver.execute_script(f"""
+                    var widget = $('#{widget_id}').data('kendoDropDownList');
+                    if (!widget) return false;
+                    
+                    var dataSource = widget.dataSource;
+                    if (!dataSource) return false;
+                    
+                    var hasData = dataSource.data().length > 0;
+                    var isEnabled = !widget.wrapper.hasClass('k-state-disabled');
+                    var isVisible = widget.wrapper.is(':visible');
+                    
+                    return hasData && isEnabled && isVisible;
+                """)
+            )
+        except TimeoutException:
+            # Check if browser closed during wait
+            if not self.is_browser_alive():
+                logging.info(f"🏁 Browser closed by user while waiting for widget: {widget_id}")
+                return False
+            logging.warning(f"⏰ Timeout waiting for Kendo widget: {widget_id}")
+            return False
+
+    def _set_kendo_dropdown_value(self, dropdown_id: str, value: str) -> bool:
+        """
+        Set Kendo dropdown value with proper event triggering.
+        Returns False if browser closed by user.
+        """
+        if not self.safe_browser_operation("Kendo dropdown set"):
+            return False
+            
+        try:
+            success = self.driver.execute_script(f"""
+                var dropdown = $('#{dropdown_id}').data('kendoDropDownList');
+                if (!dropdown) {{
+                    console.log('Kendo dropdown not found: {dropdown_id}');
+                    return false;
+                }}
+                
+                var oldValue = dropdown.value();
+                dropdown.value('{value}');
+                
+                if (oldValue !== '{value}') {{
+                    dropdown.trigger('change', {{
+                        sender: dropdown,
+                        value: '{value}',
+                        oldValue: oldValue
+                    }});
+                    
+                    var element = $('#{dropdown_id}')[0];
+                    if (element) {{
+                        var domEvent = new Event('change', {{ bubbles: true }});
+                        element.dispatchEvent(domEvent);
+                    }}
+                }}
+                
+                return true;
+            """)
+            
+            if success:
+                logging.info(f"✅ Kendo dropdown set: {dropdown_id} = {value}")
+                self._wait_for_kendo_widget_ready(dropdown_id, 5)
+            
+            return success
+            
+        except Exception as e:
+            # Check if browser closed during operation
+            if not self.is_browser_alive():
+                logging.info(f"🏁 Browser closed by user during dropdown set: {dropdown_id}")
+                return False
+            logging.error(f"❌ Failed to set Kendo dropdown {dropdown_id}: {e}")
+            return False
+
+    def _get_dropdown_data(self, dropdown_id: str) -> dict:
+        """
+        Get complete dropdown data including items and selection.
+        Returns error dict if browser closed.
+        """
+        if not self.safe_browser_operation("get dropdown data"):
+            return {'error': 'browser_closed'}
+            
+        try:
+            data = self.driver.execute_script(f"""
+                var dd = $('#{dropdown_id}').data('kendoDropDownList');
+                if (!dd) return {{error: 'not_initialized'}};
+                
+                var items = dd.dataItems();
+                var selectedValue = dd.value();
+                var selectedText = dd.text();
+                
+                return {{
+                    items: items.map(item => ({{
+                        text: item.Text || item.Title,
+                        value: item.Value || item.Id
+                    }})),
+                    selected_value: selectedValue,
+                    selected_text: selectedText,
+                    item_count: items.length
+                }};
+            """)
+            return data
+        except Exception as e:
+            if not self.is_browser_alive():
+                return {'error': 'browser_closed'}
+            logging.error(f"❌ Failed to get dropdown data for {dropdown_id}: {e}")
+            return {'error': str(e)}
+
+    def _find_dropdown_item_by_text(self, dropdown_id: str, search_text: str) -> dict:
+        """
+        Find dropdown item by partial text match.
+        Returns None if browser closed or item not found.
+        """
+        if not self.safe_browser_operation("find dropdown item"):
+            return None
+            
+        data = self._get_dropdown_data(dropdown_id)
+        if data.get('error') or not data.get('items'):
+            return None
+            
+        search_lower = search_text.lower()
+        for item in data['items']:
+            if search_lower in item['text'].lower():
+                return item
+        return None
+
+    # ===== CONSISTENT ERROR HANDLING =====
     
     def _handle_result(self, success: bool, error_msg: str | None, severity: ErrorLevel) -> bool:
-        """Handle result and return whether to continue execution"""
-        # Check browser state in error handling - exit immediately if already closed
+        """
+        Consistent error handling across all SOC classes.
+        Returns True if execution should continue, False if should stop.
+        """
         if not self.is_browser_alive():
-            logging.info("🏁 Browser already closed - immediate exit")
-            self.safe_exit()
+            logging.info("🏁 Browser closed by user during operation")
             return False
             
         if not success:
             if severity == ErrorLevel.TERMINAL:
                 logging.info(f"🏁 Terminal: {error_msg}")
-                # For TERMINAL errors, exit immediately without message injection
                 self.safe_exit()
                 return False
             elif severity == ErrorLevel.FATAL:
                 logging.error(f"💥 Fatal: {error_msg}")
-                self.inject_error_message(error_msg)  # This will wait for user to close
+                self.inject_error_message(error_msg)
                 return False
             else:  # RECOVERABLE
                 logging.warning(f"⚠️ Recoverable: {error_msg}")
-                # Continue execution for recoverable errors
                 return True
+        return True
+
+    def _safe_browser_operation(self, operation_name: str) -> bool:
+        """
+        Unified browser state check for operations.
+        Returns True if browser is alive and operation can proceed.
+        """
+        if not self.is_browser_alive():
+            logging.info(f"🏁 Browser closed by user during: {operation_name}")
+            return False
         return True
 
     # ===== CONFIGURATION METHODS =====
     
     def load_common_configuration(self, config: configparser.ConfigParser) -> OperationResult:
-        """Load configuration common to all SOC bots"""
+        """Load configuration common to all SOC bots with enhanced error handling"""
         try:           
             self.user_name = config.get('Settings', 'user_name', fallback='xxxxxx')
             raw_password = config.get('Settings', 'password', fallback='******')
@@ -199,7 +304,6 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
             self.USE_HARD_TIMEOUT_FOR_WIDGET_READY = config.getboolean('Settings', 'USE_HARD_TIMEOUT_FOR_WIDGET_READY', fallback=False)
             self.HARD_TIMEOUT_FOR_WIDGET_READY = config.getfloat('Settings', 'HARD_TIMEOUT_FOR_WIDGET_READY', fallback=1)
             
-            # ✅ SOC_id assigned once
             self.SOC_id = config.get('Settings', 'SOC_id', fallback='')
             logging.info(f"🔧 Loaded SOC_id from config: '{self.SOC_id}'") 
             
@@ -210,11 +314,7 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
     # ===== PASSWORD PROCESSING =====
 
     def process_password(self, password: str) -> str:
-        """
-        Decode base64 encoded password or return plain text as fallback.
-        This provides a basic level of password obfuscation in configuration files.
-        If base64 decoding fails, the method falls back to using the password as plain text.
-        """
+        """Decode base64 encoded password or return plain text as fallback."""
         encoded_password = password
         try:
             decoded_password = base64.b64decode(password.encode()).decode()
@@ -222,48 +322,51 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
             return decoded_password
         except Exception as e:
             logging.error(f"🔐 Failed to decode password: {str(e)}, using plain text password")
-            return encoded_password  # Fallback to plain text
+            return encoded_password
 
     # ===== LOGIN AND CREDENTIAL MANAGEMENT =====
 
-    def enter_credentials_and_prepare_soc_input(self) -> None:
+    def enter_credentials_and_prepare_soc_input(self) -> OperationResult:
         """
-        This method handles the complete login preparation:
-        1. Enters username and password into their respective fields
-        2. Checks for password issues (like line breaks)
-        3. Displays any warning messages from configuration
-        4. Injects the SOC ID input field for user entry
+        Enhanced credential entry with proper error handling.
+        Returns OperationResult instead of None.
         """
+        if not self._safe_browser_operation("credential entry"):
+            return False, "Browser closed by user", ErrorLevel.TERMINAL
+            
         try:
-            # Browser check at start of operation
-            self.check_browser_alive_or_exit("credential entry") # Corrected call, removed if not and return
-
-            # Enter username and password
             self.driver.find_element(By.ID, "UserName").send_keys(self.user_name)
             if self.password != "INCORRECT PASSWORD":
                 self.driver.find_element(By.ID, "Password").send_keys(self.password)
             else:
-                logging.error("❌ Password contains line break")
-                self.inject_error_message(f"❌ Password contains line break.")
-        except NoSuchElementException as e:
-            logging.error(f"❌ Failed to find 'Username' or 'Password' input fields: {str(e)}")
-            self.inject_error_message(f"❌ Failed to find 'Username' or 'Password' input fields .")
+                error_msg = "❌ Password contains line break"
+                logging.error(error_msg)
+                return False, error_msg, ErrorLevel.FATAL
+                
+            # Show warning message if any
+            if hasattr(self, 'warning_message') and self.warning_message:
+                self.inject_info_message(self.warning_message, style_addons={'color': 'darkorange'})
 
-        # Show warning message if any (from configuration issues)
-        if hasattr(self, 'warning_message') and self.warning_message:
-            self.inject_info_message(self.warning_message, style_addons={'color': 'darkorange'})
-
-        # Use mixin method to inject SOC ID input field
-        self.inject_SOC_id_input()
+            # Inject SOC ID input field
+            self.inject_SOC_id_input()
+            
+            return True, None, None
+            
+        except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during credential entry", ErrorLevel.TERMINAL
+            error_msg = f"Failed to enter credentials: {str(e)}"
+            logging.error(error_msg)
+            return False, error_msg, ErrorLevel.FATAL
 
     # ===== SECURITY AND ACCESS CHECKS =====
 
     def SOC_locked_check(self) -> tuple[bool, str | None]:
         """Check if SOC is locked and handle accordingly by showing error message."""
+        if not self._safe_browser_operation("SOC locked check"):
+            return False, "Browser closed by user"
+            
         try:
-            # Browser check before WebDriver operation
-            self.check_browser_alive_or_exit("SOC locked check") # Corrected call
-
             locked_xpath = "//div[@class='text-danger validation-summary-valid']//li[contains(., 'заблокирован')]"
             li_locked = self.driver.find_element(By.XPATH, locked_xpath)
             error_msg = f"❌ SOC is locked: {li_locked.text}"
@@ -271,15 +374,19 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
         except NoSuchElementException:
             logging.info("✅ Success: SOC is not locked")
             return True, None
+        except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during SOC lock check"
+            logging.error(f"❌ Error during SOC lock check: {str(e)}")
+            return False, f"Error checking SOC lock: {str(e)}"
 
     def access_denied_check(self) -> tuple[bool, str | None]:
         """Check for Access Denied error and handle accordingly."""
-        """REWORK WHEN HAPPENS!!!! see in correct XPATH below"""
+        if not self._safe_browser_operation("access denied check"):
+            return False, "Browser closed by user"
+            
         try:
-            # Browser check before WebDriver operation
-            self.check_browser_alive_or_exit("access denied check") # Corrected call
-
-            access_denied_xpath = "//div[contains(@class, 'panel-line-danger')//li[contains(text(), 'I DON'T KNOW WHAT TO FIND YET')]"
+            access_denied_xpath = "//div[contains(@class, 'panel-line-danger')]//li[contains(text(), 'I DON'T KNOW WHAT TO FIND YET')]"
             self.driver.find_element(By.XPATH, access_denied_xpath)
             error_msg = f"❌ Access denied, SOC {self.SOC_id} may be archived or in improper state"
             logging.error(error_msg)
@@ -288,15 +395,20 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
             logging.info("✅ Success: no access denied issue")
             return True, None
         except InvalidSelectorException:
-            logging.warning(f"InvalidSelectorException is TEMPORARY DISABLED IN access_denied_check()")
+            logging.warning("⚠️ InvalidSelectorException in access_denied_check() - temporary disabled")
             return True, None
+        except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during access check"
+            logging.error(f"❌ Error during access denied check: {str(e)}")
+            return False, f"Error checking access: {str(e)}"
 
     def login_failed_check(self) -> tuple[bool, str | None]:
         """Check for login failure and handle accordingly."""
+        if not self._safe_browser_operation("login failed check"):
+            return False, "Browser closed by user"
+            
         try:
-            # Browser check before WebDriver operation
-            self.check_browser_alive_or_exit("login failed check") # Corrected call
-
             login_failed_xpath = "//div[contains(@class, 'validation-summary-errors')]"
             self.driver.find_element(By.XPATH, login_failed_xpath)
             error_msg = "❌ Login issue, check the password in ini-file."
@@ -304,13 +416,18 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
         except NoSuchElementException:
             logging.info("✅ Success: no login issue")
             return True, None
+        except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during login check"
+            logging.error(f"❌ Error during login check: {str(e)}")
+            return False, f"Error checking login: {str(e)}"
 
     def error_404_not_present_check(self) -> tuple[bool, str | None]:
         """Check if no 404 error is present on the page."""
+        if not self._safe_browser_operation("404 check"):
+            return False, "Browser closed by user"
+            
         try:
-            # Browser check before WebDriver operation
-            self.check_browser_alive_or_exit("404 check") # Corrected call
-
             self.driver.find_element(By.XPATH, "//h1[contains(@class, 'text-danger') and contains(text(), '404')]")
             error_msg = f"❌ Error 404, probably SOC {self.SOC_id} does not exist"
             logging.error(error_msg)
@@ -318,12 +435,17 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
         except NoSuchElementException:
             logging.info("✅ Success: no error 404")
             return True, None
+        except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during 404 check"
+            logging.error(f"❌ Error during 404 check: {str(e)}")
+            return False, f"Error checking 404: {str(e)}"
 
     def url_contains_SOC_Details_check(self) -> tuple[bool, str | None]:
         """Verify that the current URL contains the SOC Details path."""
-        # Browser check before WebDriver operation
-        self.check_browser_alive_or_exit("URL check") # Corrected call
-
+        if not self._safe_browser_operation("URL check"):
+            return False, "Browser closed by user"
+            
         current_url = self.driver.current_url
         if "/Soc/Details/" not in current_url:
             error_message = f"❌ Wrong page loaded: {current_url}. Expected SOC Details page."
@@ -333,15 +455,15 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
 
     # ===== SOC INPUT FIELD MANAGEMENT =====
 
-    def inject_SOC_id_input(self) -> None:
+    def inject_SOC_id_input(self) -> bool:
         """
         Inject SOC ID input field into the login form with default value.
+        Returns True if successful, False if browser closed.
         """
+        if not self._safe_browser_operation("SOC input injection"):
+            return False
+            
         try:
-            # Browser check before WebDriver operation
-            self.check_browser_alive_or_exit("SOC input injection") # Corrected call
-
-            # Get the default SOC_id (might be empty string)
             default_soc_id = getattr(self, 'SOC_id', '')
             
             js_code = f"""
@@ -354,7 +476,6 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
                 input.className = "form-control control-lg";
                 input.style.marginBottom = "5px";
                 input.style.width = "100%";
-                // ✅ PRE-POPULATE with default SOC ID
                 input.value = "{default_soc_id}";
 
                 // Hide the original submit button AND prevent form submission
@@ -385,32 +506,35 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
             """
             self.driver.execute_script(js_code)
 
-            # Now use Python to add the guide text and set up monitoring
             self._setup_input_monitoring()
 
             if default_soc_id:
                 logging.info(f"✅ Injected SOC input field with default: {default_soc_id}")
             else:
                 logging.info("✅ Injected SOC input field (no default)")
+                
+            return True
 
         except NoSuchWindowException:
-            logging.warning(f"🏁 Browser windows was closed, end of script")
-            self.safe_exit()
+            logging.info("🏁 Browser closed by user during SOC input injection")
+            return False
         except Exception as e:
+            if not self.is_browser_alive():
+                logging.info("🏁 Browser closed by user during SOC input injection")
+                return False
             logging.error(f"❌ Failed to inject SOC_id input field: {str(e)}")
             self.inject_error_message(f"❌ Failed to inject SOC_id input field.")
+            return False
 
-    def _setup_input_monitoring(self) -> None:
+    def _setup_input_monitoring(self) -> bool:
         """
         Set up Python-based input monitoring and validation.
-
-        Adds guide text and Enter key listener to the injected input field.
-        The Enter key listener prevents default form submission behavior.
+        Returns True if successful, False if browser closed.
         """
+        if not self._safe_browser_operation("input monitoring setup"):
+            return False
+            
         try:
-            # Browser check before WebDriver operation
-            self.check_browser_alive_or_exit("input monitoring setup") # Corrected call
-
             # Add guide text using Python
             guide_js = """
                 var guideText = document.createElement('div');
@@ -434,22 +558,23 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
                 });
             """
             self.driver.execute_script(enter_listener_js)
+            return True
 
         except Exception as e:
+            if not self.is_browser_alive():
+                return False
             logging.error(f"❌ Failed to set up input monitoring: {str(e)}")
+            return False
 
-    def _update_input_ui(self, is_valid: bool, message: str) -> None:
+    def _update_input_ui(self, is_valid: bool, message: str) -> bool:
         """
         Update the input field UI based on validation result.
-
-        Args:
-            is_valid: Boolean indicating if the current input is valid
-            message: Validation message to display to the user
+        Returns True if successful, False if browser closed.
         """
+        if not self._safe_browser_operation("UI update"):
+            return False
+            
         try:
-            # Browser check before WebDriver operation
-            self.check_browser_alive_or_exit("UI update") # Corrected call
-
             color = 'green' if is_valid else 'orange'
             border_color = 'green' if is_valid else 'orange'
 
@@ -468,23 +593,19 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
                 }}
             """
             self.driver.execute_script(js_code)
+            return True
 
         except Exception as e:
+            if not self.is_browser_alive():
+                return False
             logging.error(f"❌ Failed to update input UI: {str(e)}")
+            return False
 
     # ===== SOC INPUT VALIDATION =====
 
     def _validate_soc_input(self, value: str) -> tuple[bool, str]:
         """
         Validate SOC input and return validation result and message.
-
-        Args:
-            value: The SOC ID value to validate
-
-        Returns:
-            Tuple of (is_valid, message) where:
-            - is_valid: Boolean indicating if input is valid
-            - message: Descriptive message for the user
         """
         if ' ' in value:
             return False, "⚠️ Spaces are not allowed in SOC ID"        
@@ -507,18 +628,20 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
     def wait_for_soc_input_and_submit(self) -> tuple[bool, str | None]:
         """
         Wait for SOC ID input and submit the form.
+        Handles browser closure gracefully.
         """
+        if not self._safe_browser_operation("SOC input wait"):
+            return False, "Browser closed by user"
+            
         try:
-            # Browser check before starting wait
-            self.check_browser_alive_or_exit("SOC input wait") # Corrected call
-
             # Wait for valid SOC ID input with timeout
             WebDriverWait(self.driver, self.MAX_WAIT_USER_INPUT_DELAY_SECONDS).until(
-                WaitForSOCInput((By.ID, "InjectedInput"), self)  # Pass self as mixin instance
+                WaitForSOCInput((By.ID, "InjectedInput"), self)
             )
 
-            # If browser closed, exit
-            self.check_browser_alive_or_exit("SOC input processing") # Corrected call
+            # Check if browser closed during wait
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during SOC input wait"
 
             # Get the SOC_id from the injected input field
             raw_soc_id = self.driver.find_element(By.ID, "InjectedInput").get_attribute("value")
@@ -557,15 +680,17 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
 
             return True, None
 
-        except (NoSuchWindowException, WebDriverException):
-            logging.warning(f"🏁 Browser window was closed, end of script")
-            self.safe_exit()
-        except TimeoutException: # Added specific handling for TimeoutException
+        except TimeoutException:
+            # Check if browser closed during timeout
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during SOC input timeout"
             error_msg = f"⏰ Timeout waiting for SOC ID input after {self.MAX_WAIT_USER_INPUT_DELAY_SECONDS} seconds."
             logging.error(error_msg)
             self.inject_error_message(error_msg)
             return False, error_msg
         except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during SOC input processing"
             error_msg = "❌ Failed to wait for SOC_id to be entered"
             logging.error(f"{error_msg}: {str(e)}")
             self.inject_error_message(error_msg)
@@ -574,16 +699,12 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
     def submit_form_with_soc_id(self) -> bool:
         """
         Submit the form with the self.SOC_id.
-        
-        Returns:
-            bool: True if successful, False if failed
+        Returns True if successful, False if browser closed or failed.
         """
+        if not self._safe_browser_operation("form submission"):
+            return False
+            
         try:
-            # Browser check before WebDriver operation
-            self.check_browser_alive_or_exit("form submission") # Corrected call
-
-            # Submit the form directly via JavaScript
-            # "form?.submit();" is same as "if (form) form.submit();"
             self.driver.execute_script("""
                 var form = document.querySelector('form');
                 form?.submit()
@@ -591,6 +712,8 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
             logging.info(f"✅ Form submitted successfully with {self.SOC_id}")
             return True
         except Exception as e:
+            if not self.is_browser_alive():
+                return False
             logging.error(f"❌ Failed to submit the form: {str(e)}")
             self.inject_error_message(f"❌ Failed to submit the form.")
             return False
@@ -600,15 +723,6 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
     def request_DB_for_SOC_id(self, SOC_id: str) -> str:
         """
         Query database for full SOC ID when partial ID is provided.
-
-        Args:
-            SOC_id: Partial SOC ID to look up in database
-
-        Returns:
-            Full SOC ID from database
-
-        Raises:
-            ValueError: If no results or multiple results found, or if result is invalid
         """
         SQL = self.SQL_template.format(soc_id=SOC_id)
 
@@ -618,17 +732,16 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
             username=self.db_username,
             password=self.db_password
         ) as sql:
-            results = sql.execute(SQL)  # Now returns list of dicts, not DataFrame
+            results = sql.execute(SQL)
             if len(results) == 1:
                 row = results[0]
                 if 'Id' not in row:
                      raise ValueError("Database query result missing 'Id' key.")
                 SOC_id_from_db = row['Id']
-                # Robust conversion to string with error handling
                 try:
                     SOC_id_converted = str(SOC_id_from_db)
                 except (TypeError, ValueError) as conv_error:
-                    logging.error(f"❌ Failed to convert DB result '{SOC_id_from_db}' (type {type(SOC_id_from_db).__name__}) to string: {conv_error}")
+                    logging.error(f"❌ Failed to convert DB result '{SOC_id_from_db}' to string: {conv_error}")
                     raise ValueError(f"Database result '{SOC_id_from_db}' could not be converted to a valid string SOC ID: {conv_error}")
                 
                 SOC_id = SOC_id_converted
@@ -640,7 +753,7 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
 
         return SOC_id
 
-    # ===== DOM/jQuery/Kendo elements readiness =====
+    # ===== PAGE READINESS METHODS =====
     
     def wait_for_page_fully_ready(self, 
                                 check_dom: bool = True,
@@ -650,27 +763,15 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
                                 timeout: int = None) -> bool:
         """
         Unified method to wait for page complete readiness including Kendo widgets.
-        
-        Args:
-            check_dom: Wait for DOM ready state
-            check_jquery: Wait for jQuery
-            check_kendo: Wait for Kendo framework
-            specific_widgets: List of specific widget IDs to wait for
-            timeout: Override default timeout
-        
-        Returns:
-            bool: True if all checks pass
+        Returns False if browser closed by user during wait.
         """
-
-        # logging.info(f"⚡ wait_for_page_fully_ready() called - DOM: {check_dom}, jQuery: {check_jquery}, Kendo: {check_kendo}, Widgets: {specific_widgets}, Timeout: {timeout}")
-        
+        if not self._safe_browser_operation("page readiness check"):
+            return False
+                
         if timeout is None:
             timeout = self.MAX_WAIT_PAGE_LOAD_DELAY_SECONDS
           
-        try:
-            # Initial browser check
-            self.check_browser_alive_or_exit("page readiness check") # Corrected call
-                
+        try:                
             wait = WebDriverWait(self.driver, timeout)
             
             # Step 1: DOM Ready (if requested)
@@ -693,19 +794,19 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
                 logging.info(f"⏳ Waiting for {len(specific_widgets)} widgets: {specific_widgets}")
                 
                 if not self.USE_HARD_TIMEOUT_FOR_WIDGET_READY:
-                    # Wait for each widget individually with shorter timeout
                     for widget_id in specific_widgets:
-                        # Browser check before each widget
-                        self.check_browser_alive_or_exit(f"waiting for widget {widget_id}") # Corrected call
+                        # Check browser state before each widget
+                        if not self._safe_browser_operation(f"waiting for widget {widget_id}"):
+                            return False
                         try:
                             logging.info(f"⏳ Checking widget: {widget_id}...")
-                            # Use shorter timeout per widget
                             widget_wait = WebDriverWait(self.driver, timeout // 5)
                             widget_wait.until(WidgetReady(widget_id))
                             logging.info(f"✅ Widget ready: {widget_id}")
                         except TimeoutException:
+                            if not self.is_browser_alive():
+                                return False
                             logging.warning(f"⚠️ Widget not ready within timeout: {widget_id}")
-                            # Continue with other widgets instead of failing completely
                             continue
                 else:
                     time.sleep(self.HARD_TIMEOUT_FOR_WIDGET_READY)
@@ -713,14 +814,18 @@ class SOC_BaseMixin(BaseWebBot): # Now inherits from BaseWebBot
             # Step 5: If Kendo is enabled but no specific widgets, just do a brief wait
             elif check_kendo:
                 logging.info("⏳ Kendo enabled but no specific widgets - brief wait...")
-                time.sleep(1)  # Short wait for any Kendo initialization
+                time.sleep(1)
             
             logging.info("✅ Page fully ready with all widgets loaded")
             return True
             
         except TimeoutException as e:
+            if not self.is_browser_alive():
+                return False
             logging.error(f"⏰ Timeout waiting for page readiness: {str(e)}")
             return False
         except Exception as e:
+            if not self.is_browser_alive():
+                return False
             logging.error(f"❌ Error waiting for page readiness: {str(e)}")
             return False
