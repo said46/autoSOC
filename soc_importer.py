@@ -165,7 +165,7 @@ class SOC_Importer(SOC_BaseMixin):
             return False, error_msg, ErrorLevel.FATAL
 
     # =========================================================================
-    # DROPDOWN MANAGEMENT METHODS
+    # DROPDOWN MANAGEMENT METHODS - ENHANCED CASCADE HANDLING
     # =========================================================================
 
     def get_dropdown_data(self, dropdown_id: str) -> dict:
@@ -234,66 +234,148 @@ class SOC_Importer(SOC_BaseMixin):
             return False
 
     def trigger_cascade_change(self, dropdown_id: str, new_value: int) -> bool:
-        """Trigger cascade by simulating dropdown change event."""
+        """
+        Comprehensive cascade trigger that mimics JavaScript behavior.
+        Triggers both Kendo and DOM change events to ensure all handlers execute.
+        
+        Args:
+            dropdown_id: The ID of the dropdown to trigger cascade from
+            new_value: The value to set and trigger cascade with
+            
+        Returns:
+            bool: True if cascade was successfully triggered
+        """
         # Check browser before operation
         if not self.is_browser_alive():
-            return False, "Browser closed", ErrorLevel.TERMINAL
+            return False
             
         try:
-            # Check browser state again before proceeding with cascade logic
-            if not self.is_browser_alive():
-                return False, "Browser closed", ErrorLevel.TERMINAL
-                
             success = self.driver.execute_script(f"""
-                var source = $('#{dropdown_id}').data('kendoDropDownList');
-                var element = $('#{dropdown_id}')[0];
-                
-                if (source && element) {{
-                    var events = $._data(element, 'events');
-                    if (events && events.change && events.change[0]) {{
-                        var handler = events.change[0].handler;
-                        source.value({new_value});
-                        
-                        var event = $.Event('change');
-                        Object.assign(event, {{
-                            target: element,
-                            currentTarget: element,
-                            sender: source,
-                            value: {new_value}
-                        }});
-                        
-                        handler.call(element, event);
-                        return true;
-                    }}
+                var dropdown = $('#{dropdown_id}').data('kendoDropDownList');
+                if (!dropdown) {{
+                    console.log('Dropdown not found: {dropdown_id}');
+                    return false;
                 }}
-                return false;
+                
+                // Store current value to check if change actually happens
+                var oldValue = dropdown.value();
+                
+                // Set the new value - this updates the widget internally
+                dropdown.value({new_value});
+                
+                // Only trigger events if value actually changed
+                if (oldValue !== {new_value}) {{
+                    // Trigger Kendo change event with proper parameters
+                    // This ensures all Kendo-specific handlers execute
+                    dropdown.trigger('change', {{
+                        sender: dropdown,
+                        value: {new_value},
+                        oldValue: oldValue
+                    }});
+                    
+                    // Also trigger DOM change event for any bound handlers
+                    // This covers non-Kendo event listeners
+                    var element = $('#{dropdown_id}')[0];
+                    if (element) {{
+                        var domEvent = new Event('change', {{ bubbles: true }});
+                        element.dispatchEvent(domEvent);
+                    }}
+                    
+                    console.log('Cascade triggered for ' + '{dropdown_id}' + ' with value: ' + {new_value});
+                }} else {{
+                    console.log('No change needed for ' + '{dropdown_id}' + ' - value already set: ' + {new_value});
+                }}
+                
+                return true;
             """)
-                        
+            
             if success:
                 logging.info(f"🔄 Cascade triggered: {dropdown_id} → {new_value}")
+                # Wait for ALL potential cascading effects to complete
+                return self._wait_for_cascade_completion(dropdown_id, new_value)
             
-            # Check again if browser is still open before waiting
-            if not self.is_browser_alive():
-                return False, "Browser closed", ErrorLevel.TERMINAL
-                
-            # Wait for common dependent widgets to be ready
-            dependent_widgets = ['OverrideMethodId', 'OverrideAppliedStateId', 'OverrideRemovedStateId']
-            self.wait_for_page_fully_ready(
-                check_dom=False,  # DOM is already ready
-                check_jquery=False,  # jQuery is already loaded
-                check_kendo=False,  # Kendo is already loaded
-                specific_widgets=dependent_widgets,
-                timeout=10  # Shorter timeout for cascade
-            )
-
-            return success
+            return False
             
         except Exception as e:
             logging.error(f"❌ Cascade failed for {dropdown_id}: {e}")
             return False
 
+    def _wait_for_cascade_completion(self, source_dropdown_id: str, new_value: int) -> bool:
+        """
+        Wait for all cascading effects to complete after a dropdown change.
+        Maps which widgets depend on which and waits for them to be ready.
+        
+        Args:
+            source_dropdown_id: The dropdown that triggered the cascade
+            new_value: The value that was set (for logging)
+            
+        Returns:
+            bool: True if all dependent widgets are ready
+        """
+        # Define cascade dependencies - which widgets are affected by which changes
+        cascade_map = {
+            'OverrideTypeId': ['OverrideMethodId', 'OverrideAppliedStateId', 'OverrideRemovedStateId'],
+            'OverrideMethodId': ['OverrideAppliedStateId', 'OverrideRemovedStateId'], 
+            'OverrideAppliedStateId': ['AdditionalValueAppliedState']  # For dynamic field visibility
+        }
+        
+        # Get the widgets that depend on the source dropdown
+        dependent_widgets = cascade_map.get(source_dropdown_id, [])
+        
+        logging.info(f"⏳ Waiting for cascade completion: {source_dropdown_id} → {dependent_widgets}")
+        
+        # Wait for dependent widgets to be re-initialized with new data
+        for widget_id in dependent_widgets:
+            if not self._wait_for_widget_ready(widget_id, timeout=10):
+                logging.warning(f"⚠️ Widget {widget_id} not ready after {source_dropdown_id} cascade")
+        
+        logging.info(f"✅ Cascade completion: {source_dropdown_id} → {new_value}")
+        return True
+
+    def _wait_for_widget_ready(self, widget_id: str, timeout: int = 10) -> bool:
+        """
+        Wait for a specific Kendo widget to be ready and populated with data.
+        Checks that the widget exists, has data, and is not disabled.
+        
+        Args:
+            widget_id: The ID of the Kendo widget to wait for
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            bool: True if widget is ready, False on timeout
+        """
+        try:
+            return WebDriverWait(self.driver, timeout).until(
+                lambda driver: driver.execute_script(f"""
+                    var widget = $('#{widget_id}').data('kendoDropDownList');
+                    if (!widget) {{
+                        console.log('Widget not initialized: {widget_id}');
+                        return false;
+                    }}
+                    
+                    // Check if widget has data source and data is loaded
+                    var dataSource = widget.dataSource;
+                    if (!dataSource) {{
+                        console.log('No data source for: {widget_id}');
+                        return false;
+                    }}
+                    
+                    var hasData = dataSource.data().length > 0;
+                    var isEnabled = !widget.wrapper.hasClass('k-state-disabled');
+                    var isVisible = widget.wrapper.is(':visible');
+                    
+                    console.log('Widget check - {widget_id}: hasData=' + hasData + ', isEnabled=' + isEnabled + ', isVisible=' + isVisible);
+                    
+                    // Wait for data to be loaded and widget enabled and visible
+                    return hasData && isEnabled && isVisible;
+                """)
+            )
+        except TimeoutException:
+            logging.warning(f"⏰ Timeout waiting for widget: {widget_id}")
+            return False
+
     # =========================================================================
-    # FORM FILLING & VALIDATION METHODS
+    # FORM FILLING & VALIDATION METHODS - ENHANCED CASCADE FLOW
     # =========================================================================
 
     def handle_dynamic_additional_fields(self, record: dict) -> OperationResult:
@@ -455,19 +537,19 @@ class SOC_Importer(SOC_BaseMixin):
         if not type_value:
             return True, None, None  # No type mapping found is acceptable
         
-        if not self.trigger_cascade_change("OverrideTypeId", type_value):
-            return False, "Failed to trigger Type cascade", ErrorLevel.FATAL
+        # Get current type value to avoid unnecessary cascade
+        current_type = self.driver.execute_script("return $('#OverrideTypeId').data('kendoDropDownList').value();")
+        if current_type == type_value:
+            logging.info(f"✅ Type already set to: {record['type_text']}")
+        else:
+            # Trigger type cascade only if value actually changed
+            if not self.trigger_cascade_change("OverrideTypeId", type_value):
+                return False, "Failed to trigger Type cascade", ErrorLevel.FATAL
         
         # Only wait if we actually need to select a method
         if record['method_text']:
             # Wait for Method dropdown specifically since we need to use it
-            success = self.wait_for_page_fully_ready(
-                check_dom=False,
-                check_jquery=False,
-                check_kendo=False,
-                specific_widgets=['OverrideMethodId'],
-                timeout=10
-            )
+            success = self._wait_for_widget_ready('OverrideMethodId', timeout=10)
             
             if not success:
                 logging.warning("⚠️ Method dropdown not ready, but continuing...")
@@ -479,48 +561,70 @@ class SOC_Importer(SOC_BaseMixin):
         return True, None, None
 
     def process_method_selection(self, record: dict) -> OperationResult:
-        """Process method selection and trigger cascade."""
+        """
+        Enhanced method selection with proper cascade handling.
+        Waits for method dropdown to be populated after type selection,
+        then triggers method cascade which affects state dropdowns.
+        """
         # Check browser before operation
         if not self.is_browser_alive():
             return False, "Browser closed", ErrorLevel.TERMINAL
             
+        # Wait for method dropdown to be populated after type selection
+        if not self._wait_for_widget_ready('OverrideMethodId', timeout=10):
+            return False, "Method dropdown not populated after type selection", ErrorLevel.FATAL
+        
         method_item = self.find_dropdown_item_by_text("OverrideMethodId", record['method_text'])
         if not method_item:
             return False, f"Method not found: {record['method_text']}", ErrorLevel.FATAL
         
+        # Get current method value to avoid unnecessary changes
+        current_method = self.driver.execute_script("return $('#OverrideMethodId').data('kendoDropDownList').value();")
+        if current_method == method_item['value']:
+            logging.info(f"✅ Method already set to: {record['method_text']}")
+            return True, None, None
+        
+        # Trigger method cascade - this will update state dropdowns
         if not self.trigger_cascade_change("OverrideMethodId", method_item['value']):
             return False, "Failed to trigger Method cascade", ErrorLevel.FATAL
         
-        # Wait for dependent state widgets to update instead of sleeping
-        dependent_widgets = ['OverrideAppliedStateId', 'OverrideRemovedStateId']
-        success = self.wait_for_page_fully_ready(
-            check_dom=False,  # DOM is already ready
-            check_jquery=False,  # jQuery is already loaded
-            check_kendo=False,  # Kendo is already loaded
-            specific_widgets=dependent_widgets,
-            timeout=10  # Shorter timeout for cascade
-        )
-        
-        if not success:
-            logging.warning("⚠️ State widgets not fully ready after method cascade (may be normal for some methods)")
-        
+        # Method cascade typically affects state dropdowns
+        # Wait for them to be updated with new data
+        state_widgets = ['OverrideAppliedStateId', 'OverrideRemovedStateId']
+        for widget_id in state_widgets:
+            self._wait_for_widget_ready(widget_id, timeout=5)
+    
         return True, None, None
 
     def process_applied_state(self, record: dict) -> OperationResult:
-        """Process applied state selection."""
+        """
+        Enhanced applied state selection with visibility handling.
+        Sets applied state and triggers cascade which may affect
+        additional value field visibility.
+        """
         # Check browser before operation
         if not self.is_browser_alive():
             return False, "Browser closed", ErrorLevel.TERMINAL
             
+        # Wait for applied state dropdown to be ready after method selection
+        if not self._wait_for_widget_ready('OverrideAppliedStateId', timeout=10):
+            return False, "Applied State dropdown not ready", ErrorLevel.FATAL
+        
         applied_item = self.find_dropdown_item_by_text("OverrideAppliedStateId", record['applied_state_text'])
         if not applied_item:
             return False, f"Applied state not found: {record['applied_state_text']}", ErrorLevel.FATAL
         
+        # Set the value and trigger cascade
         if not self.set_dropdown_value("OverrideAppliedStateId", applied_item['value']):
             return False, "Failed to set Applied State", ErrorLevel.FATAL
         
+        # Applied state changes might affect additional value field visibility
+        # Trigger cascade to ensure any visibility handlers execute
         if not self.trigger_cascade_change("OverrideAppliedStateId", applied_item['value']):
             return False, "Failed to trigger Applied State cascade", ErrorLevel.FATAL
+        
+        # Wait for dynamic field visibility changes that might result from state selection
+        self._wait_for_element_visibility("AdditionalValueAppliedState", timeout=3)
         
         return True, None, None
 
