@@ -15,7 +15,8 @@ from error_types import ErrorLevel, OperationResult
 
 class SOC_Controller(SOC_BaseMixin):
     """
-    Specialized bot for SOC overrides automation with enhanced Kendo UI interaction.
+    Specialized bot for SOC overrides automation with user-centric design.
+    Maintains browser control with the user at all times.
     """
 
     FINAL_STATE_DROPDOWN_INDEX = 1
@@ -34,7 +35,6 @@ class SOC_Controller(SOC_BaseMixin):
         success, error_msg, severity = self.load_configuration()
         if not success:
             logging.error(f"❌ Controller initialization failed: {error_msg}")
-            # Can't use inject_error_message here - browser not ready yet
             print(f"❌ FATAL: {error_msg}")
             raise RuntimeError(f"Controller initialization failed: {error_msg}")
                       
@@ -114,106 +114,17 @@ class SOC_Controller(SOC_BaseMixin):
         self.SOC_id = soc_id
 
     # =========================================================================
-    # KENDO WIDGET INTERACTION METHODS
-    # =========================================================================
-
-    def _wait_for_kendo_widget_ready(self, widget_id: str, timeout: int = 10) -> bool:
-        """
-        Wait for Kendo widget to be fully initialized and ready.
-        Based on typical Kendo UI patterns from app.min.js.
-        """
-        if not self.is_browser_alive():
-            return False
-            
-        try:
-            return WebDriverWait(self.driver, timeout).until(
-                lambda driver: driver.execute_script(f"""
-                    var widget = $('#{widget_id}').data('kendoDropDownList');
-                    if (!widget) return false;
-                    
-                    // Check if widget has data source and data is loaded
-                    var dataSource = widget.dataSource;
-                    if (!dataSource) return false;
-                    
-                    var hasData = dataSource.data().length > 0;
-                    var isEnabled = !widget.wrapper.hasClass('k-state-disabled');
-                    var isVisible = widget.wrapper.is(':visible');
-                    
-                    return hasData && isEnabled && isVisible;
-                """)
-            )
-        except TimeoutException:
-            logging.warning(f"⏰ Timeout waiting for Kendo widget: {widget_id}")
-            return False
-
-    def _set_kendo_dropdown_value(self, dropdown_id: str, value: str) -> bool:
-        """
-        Set Kendo dropdown value with proper event triggering.
-        Mimics JavaScript behavior from app.min.js.
-        """
-        if not self.is_browser_alive():
-            return False
-            
-        try:
-            success = self.driver.execute_script(f"""
-                var dropdown = $('#{dropdown_id}').data('kendoDropDownList');
-                if (!dropdown) {{
-                    console.log('Kendo dropdown not found: {dropdown_id}');
-                    return false;
-                }}
-                
-                var oldValue = dropdown.value();
-                
-                // Set the value
-                dropdown.value('{value}');
-                
-                // Trigger change event if value actually changed
-                if (oldValue !== '{value}') {{
-                    // Trigger Kendo change event
-                    dropdown.trigger('change', {{
-                        sender: dropdown,
-                        value: '{value}',
-                        oldValue: oldValue
-                    }});
-                    
-                    // Also trigger DOM change event
-                    var element = $('#{dropdown_id}')[0];
-                    if (element) {{
-                        var domEvent = new Event('change', {{ bubbles: true }});
-                        element.dispatchEvent(domEvent);
-                    }}
-                }}
-                
-                return true;
-            """)
-            
-            if success:
-                logging.info(f"✅ Kendo dropdown set: {dropdown_id} = {value}")
-                # Wait for widget to update
-                self._wait_for_kendo_widget_ready(dropdown_id, 5)
-            
-            return success
-            
-        except Exception as e:
-            logging.error(f"❌ Failed to set Kendo dropdown {dropdown_id}: {e}")
-            return False
-
-    # =========================================================================
-    # STATUS AND ROLE MANAGEMENT - ENHANCED
+    # STATUS AND ROLE MANAGEMENT - ENHANCED WITH BROWSER CLOSURE HANDLING
     # =========================================================================
 
     def get_SOC_status(self) -> OperationResult:
-        """
-        Get SOC status with multiple fallback methods.
-        Uses both XPath and CSS selectors for robustness.
-        """
-        if not self.is_browser_alive():
-            return False, "Browser closed", ErrorLevel.TERMINAL
+        """Returns (success, error_message, severity)"""
+        if not self._safe_browser_operation("get SOC status"):
+            return False, "Browser closed by user", ErrorLevel.TERMINAL
             
         try:
-            # Method 1: Try multiple XPath patterns
+            # Multiple fallback methods for status detection
             status_scripts = [
-                # Common pattern for status labels
                 """
                 return document.evaluate(
                     "//label[contains(text(), 'Состояние')]/following-sibling::text()[1]",
@@ -223,7 +134,6 @@ class SOC_Controller(SOC_BaseMixin):
                     null
                 ).stringValue.trim();
                 """,
-                # Alternative pattern for different UI layouts
                 """
                 return document.evaluate(
                     "//span[contains(text(), 'Состояние')]/following-sibling::span",
@@ -232,11 +142,6 @@ class SOC_Controller(SOC_BaseMixin):
                     XPathResult.STRING_TYPE,
                     null
                 ).stringValue.trim();
-                """,
-                # CSS selector fallback
-                """
-                var statusEl = document.querySelector('[class*="status"], [id*="Status"]');
-                return statusEl ? statusEl.textContent.trim() : '';
                 """
             ]
             
@@ -247,41 +152,41 @@ class SOC_Controller(SOC_BaseMixin):
                     break
             
             if not status:
-                return False, "SOC status not found using any detection method", ErrorLevel.FATAL
+                return False, "SOC status cannot be empty", ErrorLevel.FATAL
                 
             logging.info(f"👆 SOC {self.SOC_id} status: '{status}'")
             self.SOC_status = status.lower()
             return True, None, None
             
         except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during status check", ErrorLevel.TERMINAL
             return False, f"Failed to get SOC status: {str(e)}", ErrorLevel.FATAL
 
     def get_current_role(self) -> tuple[bool, str | None, ErrorLevel]:
-        """Get current role with enhanced detection."""
-        if not self.is_browser_alive():
-            return False, "Browser closed", ErrorLevel.TERMINAL
+        """Returns (success, role_or_error, severity)"""
+        if not self._safe_browser_operation("get current role"):
+            return False, "Browser closed by user", ErrorLevel.TERMINAL
             
         try:
             # Try multiple selectors for role detection
             role_selectors = [
                 "//span[@class='k-state-active' and contains(text(), 'Роль:')]",
                 "//span[contains(text(), 'Роль:')]",
-                "//div[contains(text(), 'Роль:')]",
-                ".role-selector, [class*='role']"
+                "//div[contains(text(), 'Роль:')]"
             ]
             
             role_element = None
             for selector in role_selectors:
                 try:
-                    if selector.startswith('//') or selector.startswith('.') or selector.startswith('['):
-                        role_element = self.driver.find_element(By.XPATH, selector) if selector.startswith('//') else self.driver.find_element(By.CSS_SELECTOR, selector)
+                    role_element = self.driver.find_element(By.XPATH, selector)
                     if role_element:
                         break
                 except NoSuchElementException:
                     continue
             
             if not role_element:
-                return False, "Role element not found with any selector", ErrorLevel.RECOVERABLE
+                return False, "Role element not found", ErrorLevel.RECOVERABLE
             
             role_text = role_element.text.strip()
             if "Роль:" in role_text:
@@ -292,15 +197,17 @@ class SOC_Controller(SOC_BaseMixin):
                 return False, f"Unexpected role format: '{role_text}'", ErrorLevel.RECOVERABLE
 
         except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during role check", ErrorLevel.TERMINAL
             return False, f"Could not determine role: {str(e)}", ErrorLevel.RECOVERABLE
 
     def switch_role(self, role: str) -> OperationResult:
-        """Switch role with proper Kendo widget interaction."""
-        if not self.is_browser_alive():
-            return False, "Browser closed", ErrorLevel.TERMINAL
+        """Returns (success, error_message, severity)"""
+        if not self._safe_browser_operation("switch role"):
+            return False, "Browser closed by user", ErrorLevel.TERMINAL
             
         try:
-            # Check current role first
+            # Check current role
             success, current_role_or_error, severity = self.get_current_role()
             if not success:
                 return False, current_role_or_error, severity
@@ -347,16 +254,18 @@ class SOC_Controller(SOC_BaseMixin):
             return True, None, None
 
         except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during role switch", ErrorLevel.TERMINAL
             return False, f"Failed to switch role to {role}: {str(e)}", ErrorLevel.FATAL
 
     # =========================================================================
-    # SOC WORKFLOW OPERATIONS - ENHANCED
+    # SOC WORKFLOW OPERATIONS - ENHANCED WITH BROWSER CLOSURE HANDLING
     # =========================================================================
 
     def accept_SOC_to_apply(self) -> OperationResult:
-        """Accept SOC for application with proper Kendo interaction."""
-        if not self.is_browser_alive():
-            return False, "Browser closed", ErrorLevel.TERMINAL
+        """Returns (success, error_message, severity)"""
+        if not self._safe_browser_operation("accept SOC to apply"):
+            return False, "Browser closed by user", ErrorLevel.TERMINAL
             
         try:
             # Get current status
@@ -401,6 +310,8 @@ class SOC_Controller(SOC_BaseMixin):
                     lambda _: self.get_SOC_status()[0] and self.SOC_status != old_status
                 )
             except TimeoutException:
+                if not self.is_browser_alive():
+                    return False, "Browser closed by user during status change wait", ErrorLevel.TERMINAL
                 return False, f"Timeout waiting for status change from '{old_status}'", ErrorLevel.FATAL
 
             # Verify new status
@@ -412,12 +323,14 @@ class SOC_Controller(SOC_BaseMixin):
             return True, None, None
 
         except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during SOC acceptance", ErrorLevel.TERMINAL
             return False, f"Failed to accept SOC {self.SOC_id}: {str(e)}", ErrorLevel.FATAL
 
     def update_points(self) -> OperationResult:
-        """Update points with enhanced error handling."""
-        if not self.is_browser_alive():
-            return False, "Browser closed", ErrorLevel.TERMINAL
+        """Returns (success, error_message, severity)"""
+        if not self._safe_browser_operation("update points"):
+            return False, "Browser closed by user", ErrorLevel.TERMINAL
             
         try:
             item_xpath = f"//select[@id='CurrentStateSelect' and not(@disabled)]"
@@ -425,8 +338,9 @@ class SOC_Controller(SOC_BaseMixin):
             logging.info(f"Updating {len(sel_items)} points")
 
             for point_index, sel_item in enumerate(sel_items, start=1):
-                if not self.is_browser_alive():
-                    return False, "Browser closed during points update", ErrorLevel.TERMINAL
+                # Check browser state before each point update
+                if not self._safe_browser_operation(f"update point {point_index}"):
+                    return False, "Browser closed by user during points update", ErrorLevel.TERMINAL
                     
                 drop = Select(sel_item)
                 if len(drop.options) > 1:
@@ -439,7 +353,10 @@ class SOC_Controller(SOC_BaseMixin):
                         continue
             
             return True, None, None
+            
         except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during points update", ErrorLevel.TERMINAL
             return False, f"Failed to update points: {str(e)}", ErrorLevel.RECOVERABLE
 
     # =========================================================================
@@ -447,13 +364,17 @@ class SOC_Controller(SOC_BaseMixin):
     # =========================================================================
 
     def navigate_to_soc_and_check_status(self) -> OperationResult:
-        """Navigate to SOC with comprehensive status checking."""
-        if not self.is_browser_alive():
-            return False, "Browser closed", ErrorLevel.TERMINAL
+        """Returns (success, error_message, severity)"""
+        if not self._safe_browser_operation("navigate to SOC"):
+            return False, "Browser closed by user", ErrorLevel.TERMINAL
             
         try:
             SOC_view_base_link = self._base_link + r"Soc/Details/"
             self.driver.get(SOC_view_base_link + self.SOC_id)
+            
+            # Check if browser closed during navigation
+            if not self._safe_browser_operation("SOC details navigation"):
+                return False, "Browser closed by user during navigation", ErrorLevel.TERMINAL
             
             # Wait for page to load completely
             if not self.wait_for_page_fully_ready():
@@ -485,6 +406,11 @@ class SOC_Controller(SOC_BaseMixin):
                     
                 # Navigate back to SOC details
                 self.driver.get(SOC_view_base_link + self.SOC_id)
+                
+                # Check browser state after navigation
+                if not self._safe_browser_operation("SOC details after role switch"):
+                    return False, "Browser closed by user after role switch", ErrorLevel.TERMINAL
+                    
                 if not self.wait_for_page_fully_ready():
                     return False, "SOC details page failed to load after role switch", ErrorLevel.FATAL
                 
@@ -510,17 +436,20 @@ class SOC_Controller(SOC_BaseMixin):
             return True, None, None
 
         except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during SOC navigation", ErrorLevel.TERMINAL
             return False, f"Navigation to SOC failed: {str(e)}", ErrorLevel.FATAL
 
     def process_soc_roles(self) -> OperationResult:
-        """Process SOC roles with enhanced navigation and error handling."""
-        if not self.is_browser_alive():
-            return False, "Browser closed", ErrorLevel.TERMINAL
+        """Returns (success, error_message, severity)"""
+        if not self._safe_browser_operation("process SOC roles"):
+            return False, "Browser closed by user", ErrorLevel.TERMINAL
             
         try:
             for SOC_role in self.SOC_roles:
-                if not self.is_browser_alive():
-                    return False, "Browser closed during role processing", ErrorLevel.TERMINAL
+                # Check browser state before each role
+                if not self._safe_browser_operation(f"process role {SOC_role}"):
+                    return False, "Browser closed by user during role processing", ErrorLevel.TERMINAL
                     
                 # Switch role
                 success, error_msg, severity = self.switch_role(SOC_role)
@@ -530,6 +459,10 @@ class SOC_Controller(SOC_BaseMixin):
                 # Navigate to update page
                 SOC_update_base_link = self._base_link + r"Soc/UpdateOverride/"
                 self.driver.get(SOC_update_base_link + self.SOC_id)
+
+                # Check browser state after navigation
+                if not self._safe_browser_operation(f"SOC update for role {SOC_role}"):
+                    return False, "Browser closed by user during SOC update navigation", ErrorLevel.TERMINAL
 
                 # Wait for page load
                 if not self.wait_for_page_fully_ready():
@@ -550,6 +483,8 @@ class SOC_Controller(SOC_BaseMixin):
                         lambda _: len(self.driver.find_elements(By.XPATH, "//select[@id='CurrentStateSelect' and not(@disabled)]")) >= 1
                     )
                 except TimeoutException:
+                    if not self.is_browser_alive():
+                        return False, "Browser closed by user while waiting for points", ErrorLevel.TERMINAL
                     return False, f"No points found to update for role {SOC_role}", ErrorLevel.FATAL
 
                 # Update points
@@ -565,6 +500,8 @@ class SOC_Controller(SOC_BaseMixin):
             return True, None, None
 
         except Exception as e:
+            if not self.is_browser_alive():
+                return False, "Browser closed by user during SOC role processing", ErrorLevel.TERMINAL
             return False, f"Failed to process SOC roles: {str(e)}", ErrorLevel.FATAL
 
     # =========================================================================
@@ -572,8 +509,8 @@ class SOC_Controller(SOC_BaseMixin):
     # =========================================================================
 
     def wait_for_user_confirmation(self) -> OperationResult:
-        """Wait for user confirmation with enhanced error handling."""
-        if not self.is_browser_alive():
+        """Returns (success, error_message, severity)"""
+        if not self._safe_browser_operation("wait for user confirmation"):
             return True, "Browser already closed by user", ErrorLevel.RECOVERABLE
             
         try:
@@ -591,11 +528,13 @@ class SOC_Controller(SOC_BaseMixin):
             return True, None, None
             
         except TimeoutException:
+            # Timeout is normal - user didn't press confirm within the time limit
             if not self.is_browser_alive():
                 return True, "Browser closed by user during confirmation wait", ErrorLevel.RECOVERABLE
             return True, "User confirmation timeout - continuing anyway", ErrorLevel.RECOVERABLE
             
         except Exception as e:
+            # If browser closed during wait, that's normal user behavior
             if not self.is_browser_alive():
                 return True, "Browser closed by user during confirmation wait", ErrorLevel.RECOVERABLE
             error_msg = f"Failed waiting for confirm: {e}"
@@ -607,27 +546,46 @@ class SOC_Controller(SOC_BaseMixin):
     # =========================================================================
 
     def run(self, standalone=False):
+        """Main execution workflow with browser closure handling."""
         if not self._initialized:
             logging.error("❌ Controller not properly initialized")
             return
             
-        if standalone:
-            self.navigate_to_base()
-            self.enter_credentials_and_prepare_soc_input()
-                        
-            success, error_msg = self.wait_for_soc_input_and_submit()
-            if not success:
-                if not self._handle_result(False, error_msg, ErrorLevel.FATAL):
-                    return
+        try:
+            if standalone:
+                # Navigate to base and prepare SOC input
+                if not self.navigate_to_base():
+                    return  # Browser closed during navigation
                     
-        # Main workflow with proper severity handling
-        success, error_msg, severity = self.navigate_to_soc_and_check_status()
-        if not self._handle_result(success, error_msg, severity):
-            return
+                success, error_msg, severity = self.enter_credentials_and_prepare_soc_input()
+                if not self._handle_result(success, error_msg, severity):
+                    return
+                                
+                success, error_msg = self.wait_for_soc_input_and_submit()
+                if not success:
+                    # Convert to OperationResult for consistent handling
+                    if not self._handle_result(False, error_msg, ErrorLevel.FATAL):
+                        return
+
+            # Main workflow with proper severity handling
+            success, error_msg, severity = self.navigate_to_soc_and_check_status()
+            if not self._handle_result(success, error_msg, severity):
+                return
         
-        success, error_msg, severity = self.process_soc_roles()
-        if not self._handle_result(success, error_msg, severity):
-            return
+            success, error_msg, severity = self.process_soc_roles()
+            if not self._handle_result(success, error_msg, severity):
+                return
+                
+            # If we reach here, workflow completed successfully
+            logging.info("🎉 SOC controller workflow completed successfully")
+            self.inject_info_message("✅ SOC processing completed successfully", 
+                                   style_addons={'color': 'green'})
+            
+        except Exception as e:
+            logging.error(f"❌ Unhandled exception in main workflow: {e}")
+            # Check if browser is still alive to show error message
+            if self.is_browser_alive():
+                self.inject_error_message(f"💥 Unexpected error: {str(e)}")
             
 if __name__ == "__main__":
     try:
