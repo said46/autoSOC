@@ -133,18 +133,18 @@ async function quickDiscover() {
 }
 
 // 1. Full detailed discovery
-await discoverAllOptions();
+// await discoverAllOptions();
 
 // 2. Test specific types
-await testType(1, "Байпас");
-await testType(2, "Блокировка");
+// await testType(1, "Байпас");
+// await testType(2, "Блокировка");
 
 // 3. Quick overview
-await quickDiscover();
+// await quickDiscover();
 
 // 4. Individual method checks
-const methods = await getOverrideMethodsByType(3);
-if (methods.success) {
-    const firstMethod = methods.data[0];
-    const states = await getOverrideStatesByMethod(firstMethod.Value);
-}
+// const methods = await getOverrideMethodsByType(3);
+// if (methods.success) {
+//     const firstMethod = methods.data[0];
+//     const states = await getOverrideStatesByMethod(firstMethod.Value);
+// }
