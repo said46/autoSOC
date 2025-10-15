@@ -11,3 +11,6 @@ $(document).ajaxComplete(function(event, xhr, settings) {
         console.log("📌 Possible cascade URL:", settings.url);
     }
 });
+
+// Type Changed → Call /SOC/GetOverrideMethodsByType?overrideTypeId=X
+// Method Changed → Call /SOC/GetOverrideStatesByMethod?overrideMethodId=Y
