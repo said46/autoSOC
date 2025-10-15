@@ -23,7 +23,6 @@ def message_box(title, text, style):
     return ctypes.windll.user32.MessageBoxW(0, text, title, style)
 
 # Typed dictionary for additional CSS styles in message injection
-# total=False makes all keys optional
 class StyleAddons(TypedDict, total=False):
     color: str
     width: str | None
@@ -32,16 +31,14 @@ class StyleAddons(TypedDict, total=False):
 
 class BaseWebBot:
     """
-    Base class for web automation bots with common functionality.
-
-    This abstract class provides foundational methods for web automation including:
-    - WebDriver management and configuration
-    - Error handling and exception management
-    - Message injection for user feedback
-    - Browser state monitoring
-    - Common interaction patterns
-
-    Child classes must implement the abstract base_link property.
+    Base class for web automation bots with user-centric design.
+    
+    Core Principles:
+    1. Browser window NEVER closes without user intervention
+    2. User can close browser AT ANY TIME - scripts must handle this gracefully
+    3. All user communication happens through HTML message injection
+    4. Logging is for developers, messages are for users
+    5. Users control the workflow pace through interactive pauses
     """
 
     def __init__(self):
@@ -68,7 +65,7 @@ class BaseWebBot:
     def create_driver(self) -> WebDriver:
         """Create and configure a Chrome WebDriver instance with optimized options."""
         options = Options()
-        # Suppress unnecessary logging and errors
+        # Suppress unnecessary logging and errors to keep console clean
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
         options.add_argument("--log-level=3")  # Only fatal errors
         options.add_argument("--silent")  # Suppress console output
@@ -77,14 +74,23 @@ class BaseWebBot:
 
     def set_driver(self, driver):
         """Allow external driver injection for session reuse."""
-        # DriverManager handles quitting old driver if necessary
         self.driver = driver
 
     def safe_exit(self) -> None:
-        """Clean up resources and exit safely, ensuring WebDriver is properly closed."""
+        """
+        Clean up resources and exit safely.
+        
+        IMPORTANT: If browser is still open, it remains under user control.
+        If browser was closed by user, we clean up driver resources.
+        """
         try:
-            if hasattr(self, 'driver') and self.driver:
-                DriverManager.quit_driver()
+            if self.is_browser_alive():
+                logging.info("🏁 Script execution completed - browser remains open for user")
+                # Browser still open - user in control, no driver cleanup needed
+            else:
+                logging.info("🏁 Browser closed by user - cleaning up driver resources")
+                DriverManager.quit_driver()  # Clean up since user already closed browser
+                
         except Exception as e:
             logging.error(f"❌ Error during cleanup: {str(e)}")
         finally:
@@ -98,34 +104,75 @@ class BaseWebBot:
         """Child classes MUST define this property to specify the base URL."""
         pass
 
-    # ===== NAVIGATION METHODS =====
+    # ===== BROWSER STATE MONITORING - CRITICAL FOR USER CLOSURE HANDLING =====
+
+    def is_browser_alive(self) -> bool:
+        """
+        Check if the browser window is still open and responsive.
+        
+        Returns:
+            bool: True if browser is alive, False if user closed it
+        """
+        try:
+            # This will raise an exception if browser is closed
+            _ = self.driver.current_url
+            return True
+        except (NoSuchWindowException, WebDriverException):
+            return False
 
     def check_browser_alive_or_exit(self, context: str = "") -> None:
         """
-        Check if browser is alive. Exit safely if closed.
-
-        Args:
-            context: Optional context for logging what operation was interrupted
-        """        
-        if self.is_browser_alive():
+        Check if browser is alive. If user closed it, exit gracefully.
+        
+        This is used in methods that don't return values (void methods)
+        where browser closure should terminate the operation.
+        """
+        if not self.is_browser_alive():
             if context:
-                logging.info(f"🏁 Browser closed during: {context}")
+                logging.info(f"🏁 Browser closed by user during: {context}")
             else:
-                logging.info("🏁 Browser closed")
+                logging.info("🏁 Browser closed by user")
             self.safe_exit()
 
+    def safe_browser_operation(self, operation_name: str) -> bool:
+        """
+        Safe wrapper for operations that should continue if browser is closed.
+        
+        Returns:
+            bool: True if browser is alive and operation can proceed, 
+                  False if user closed browser (operation should stop)
+        """
+        if not self.is_browser_alive():
+            logging.info(f"🏁 Browser closed by user during: {operation_name}")
+            return False
+        return True
 
-    def navigate_to_base(self) -> None:
-        """Navigate to the base URL defined by child classes, maximizing the browser window."""
-        # Check browser state before navigation
-        self.check_browser_alive_or_exit("navigate_to_base")
+    # ===== NAVIGATION METHODS =====
+
+    def navigate_to_base(self) -> bool:
+        """
+        Navigate to the base URL defined by child classes.
+        
+        Returns:
+            bool: True if navigation successful, False if browser was closed by user
+        """
+        if not self.safe_browser_operation("navigate_to_base"):
+            return False
             
         try:
             self.driver.maximize_window()
-            self.driver.get(self.base_link)  # Uses the abstract property
+            self.driver.get(self.base_link)
+            logging.info(f"✅ Navigated to: {self.base_link}")
+            return True
         except WebDriverException as e:
+            # Check if browser was closed during navigation
+            if not self.is_browser_alive():
+                logging.info("🏁 Browser closed by user during navigation")
+                return False
+                
             logging.error(f"❌ Failed to load {self.base_link} - {e.__class__.__name__}")
             self.inject_error_message(f"❌ Cannot access {self.base_link}. Check network connection.")
+            return False
 
     # ===== EXCEPTION AND ERROR HANDLING =====
 
@@ -136,57 +183,31 @@ class BaseWebBot:
                 # Allow normal handling of Ctrl+C
                 sys.__excepthook__(exc_type, exc_value, exc_traceback)
                 return
+                
             logging.error("💥 Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+            
+            # Check if browser is still alive to show error message
+            if self.is_browser_alive():
+                error_msg = f"💥 Unexpected error: {exc_value}"
+                self.inject_error_message(error_msg)
+            else:
+                logging.info("🏁 Browser already closed by user during error")
+                
             self.safe_exit()
+            
         sys.excepthook = handle_exception
 
-    # ===== BROWSER STATE MONITORING =====
-
-    def _is_browser_closed(self) -> bool:
-        """Check if the browser window has been closed by the user."""
-        try:
-            _ = self.driver.current_url  # Will raise exception if browser is closed
-            return False
-        except WebDriverException: # More specific exception catch
-            return True
-
-    def is_browser_alive(self) -> bool:
-        """Public API for browser state checking"""
-        return not self._is_browser_closed()
-
-    def check_browser_alive_or_exit(self, context: str = "") -> None:
-        """Termination pattern - for void methods"""
-        if not self.is_browser_alive():
-            logging.info(f"🏁 Browser closed during: {context}")
-            self.safe_exit()
-
-    def _wait_for_browser_to_close(self, timeout: int = 3600) -> bool:
-        """
-        Wait for browser to be closed by user, with proper error handling.
-        """
-        try:
-            start_time = time.time()
-            
-            while time.time() - start_time < timeout:
-                if not self.is_browser_alive():
-                    logging.info("✅ Browser closed by user")
-                    return True
-                    
-                time.sleep(1)  # Check every second
-                
-            logging.info("⏰ Timeout reached - browser still open")
-            return False
-            
-        except Exception as e:
-            logging.error(f"❌ Error waiting for browser close: {e}")
-            return False
-
-    # ===== ELEMENT INTERACTION METHODS =====
+    # ===== ELEMENT INTERACTION METHODS WITH BROWSER CLOSURE HANDLING =====
 
     def click_button(self, locator, timeout: int = 10) -> bool:
-        """Click button with detailed error reporting"""
-        # Check browser state before interaction
-        self.check_browser_alive_or_exit("click_button")
+        """
+        Click button with browser closure handling.
+        
+        Returns:
+            bool: True if click successful, False if failed or browser closed
+        """
+        if not self.safe_browser_operation("click_button"):
+            return False
             
         try:
             element = WebDriverWait(self.driver, timeout).until(
@@ -196,18 +217,29 @@ class BaseWebBot:
             logging.info(f"✅ Successfully clicked button: {locator}")
             return True
         except TimeoutException:
+            # Check if browser closed during wait
+            if not self.is_browser_alive():
+                logging.info(f"🏁 Browser closed by user while waiting for button: {locator}")
+                return False
             logging.error(f"⏰ Timeout: Button {locator} not clickable after {timeout} seconds")
             return False
         except Exception as e:
+            # Check if browser closed during operation
+            if not self.is_browser_alive():
+                logging.info(f"🏁 Browser closed by user during button click: {locator}")
+                return False
             logging.error(f"❌ Error clicking button {locator}: {str(e)}")
             return False
 
-    # ===== DOM elements readiness =====
-
     def _wait_for_element_visibility(self, element_id: str, timeout: int = 5) -> bool:
-        """Wait for element to become visible."""
-        # Check browser state before waiting
-        self.check_browser_alive_or_exit("_wait_for_element_visibility")
+        """
+        Wait for element to become visible with browser closure handling.
+        
+        Returns:
+            bool: True if element visible, False if timeout or browser closed
+        """
+        if not self.safe_browser_operation("_wait_for_element_visibility"):
+            return False
             
         try:
             WebDriverWait(self.driver, timeout).until(
@@ -215,24 +247,29 @@ class BaseWebBot:
             )
             return True
         except TimeoutException:
+            # Check if browser closed during wait
+            if not self.is_browser_alive():
+                logging.info(f"🏁 Browser closed by user while waiting for element: {element_id}")
+                return False
             return False
-    
-    # ===== MESSAGE INJECTION METHODS =====
+        except Exception as e:
+            if not self.is_browser_alive():
+                logging.info(f"🏁 Browser closed by user during element visibility check: {element_id}")
+                return False
+            logging.error(f"❌ Error waiting for element {element_id}: {str(e)}")
+            return False
+
+    # ===== MESSAGE INJECTION METHODS WITH BROWSER CLOSURE HANDLING =====
 
     def inject_error_message(self, msg_text: str, locator: tuple[str, str] = None,
                              style_addons: StyleAddons = None) -> None:
         """
         Inject an error message and wait for browser closure.
-
+        
         Use for fatal errors where the script cannot continue.
-
-        Args:
-            msg_text: The error message to display
-            locator: Optional tuple (By.XPATH, xpath) to position message relative to an element
-            style_addons: Optional CSS style overrides
         """
-        # Check browser state before message injection
-        self.check_browser_alive_or_exit("inject_error_message")
+        if not self.safe_browser_operation("inject_error_message"):
+            return
             
         if style_addons is None:
             style_addons = self.default_style_addons
@@ -243,16 +280,11 @@ class BaseWebBot:
                            style_addons: StyleAddons = None) -> None:
         """
         Inject an informational message without waiting for browser closure.
-
+        
         Use for non-fatal notifications where the script continues execution.
-
-        Args:
-            msg_text: The info message to display
-            locator: Optional tuple (By.XPATH, xpath) to position message relative to an element
-            style_addons: Optional CSS style overrides
         """
-        # Check browser state before message injection
-        self.check_browser_alive_or_exit("inject_info_message")
+        if not self.safe_browser_operation("inject_info_message"):
+            return
             
         if style_addons is None:
             style_addons = self.default_style_addons
@@ -262,6 +294,10 @@ class BaseWebBot:
                                 style_addons: dict = None, wait_timeout: int = None) -> bool:
         """
         Inject message and wait for browser close, with built-in browser state checking.
+        
+        Returns:
+            bool: True if message injected and browser closed by user,
+                  False if browser already closed or timeout
         """
         # Check browser state first
         if not self.is_browser_alive():
@@ -277,7 +313,7 @@ class BaseWebBot:
             if wait_timeout is None:
                 wait_timeout = self.MAX_WAIT_USER_INPUT_DELAY_SECONDS
                 
-            logging.info(f"⏳ Browser open - waiting up to {wait_timeout} seconds for user to close it")
+            logging.info(f"⏳ Waiting up to {wait_timeout} seconds for user to close browser...")
             
             # Wait for browser to close with periodic state checks
             return self._wait_for_browser_to_close(wait_timeout)
@@ -287,17 +323,15 @@ class BaseWebBot:
             return False
 
     def _inject_message(self, msg_text: str, locator: tuple[str, str] = None,
-                       style_addons: StyleAddons = None) -> None:
+                       style_addons: StyleAddons = None) -> bool:
         """
         Core message injection logic using JavaScript execution.
-
-        Args:
-            msg_text: The message text to inject
-            locator: Optional tuple for relative positioning
-            style_addons: Optional CSS style customization
+        
+        Returns:
+            bool: True if message injected successfully, False if failed or browser closed
         """
-        # Check browser state before DOM manipulation
-        self.check_browser_alive_or_exit("_inject_message")
+        if not self.safe_browser_operation("_inject_message"):
+            return False
             
         if style_addons is None:
             style_addons = self.default_style_addons
@@ -316,50 +350,63 @@ class BaseWebBot:
                 js_code = self._get_injection_js_code(msg_text, None, "absolute", style_addons)
 
             self.driver.execute_script(js_code)
-            logging.info(f"✅ message injected successfully")
+            logging.info(f"✅ Message injected successfully: {msg_text[:50]}...")
+            return True
 
         except NoSuchWindowException:
-            logging.warning("⚠️  Browser window was closed")
-            self.safe_exit()
+            logging.info("🏁 Browser closed by user during message injection")
+            return False
         except Exception as e:
+            # Check if browser closed during operation
+            if not self.is_browser_alive():
+                logging.info("🏁 Browser closed by user during message injection")
+                return False
             logging.error(f"❌ Failed to inject message: {str(e)}")
+            return False
+
+    def _wait_for_browser_to_close(self, timeout: int = 3600) -> bool:
+        """
+        Wait for browser to be closed by user, with proper error handling.
+        
+        Returns:
+            bool: True if browser closed by user, False if timeout reached
+        """
+        try:
+            start_time = time.time()
+            
+            while time.time() - start_time < timeout:
+                if not self.is_browser_alive():
+                    logging.info("✅ Browser closed by user")
+                    return True
+                time.sleep(1)  # Check every second
+                
+            logging.info("⏰ Timeout reached - browser still open")
+            return False
+            
+        except Exception as e:
+            logging.error(f"❌ Error waiting for browser close: {e}")
+            return False
 
     def _get_injection_js_code(self, msg_text: str, xpath: str, position: str,
                               style_addons: StyleAddons = None) -> str:
         """
         Generate JavaScript code for DOM message injection.
-
-        Args:
-            msg_text: Text content of the message
-            xpath: XPath for relative positioning (if applicable)
-            position: "absolute" for fixed positioning, "relative" for element-relative
-            style_addons: CSS style customization options
-
-        Returns:
-            JavaScript code as string for execution
+        (This method remains unchanged from your original implementation)
         """
         if style_addons is None:
             style_addons = self.default_style_addons
 
-        # Extract values from style_addons with defaults
         color = style_addons.get('color', self.default_style_addons['color'])
-        width = style_addons.get('width')  # Returns None if key missing
+        width = style_addons.get('width')
         align = style_addons.get('align', self.default_style_addons['align'])
 
-        # Sanitize msg_text for use in JS string literal (basic escaping)
-        # Using repr() and slicing off the quotes is a common way for simple strings.
-        # For more complex data, json.dumps(msg_text) is often safer.
         import json
-        escaped_msg_text = json.dumps(msg_text)[1:-1] # Remove surrounding quotes from json string
-
-        # Sanitize xpath for use in JS string literal (basic escaping)
+        escaped_msg_text = json.dumps(msg_text)[1:-1]
         escaped_xpath = json.dumps(xpath)[1:-1] if xpath is not None else ""
 
-        # Build conditional width CSS
         width_css = f"width: {width};" if width else ""
 
         if position == "absolute":
-            # Fixed positioning at top of viewport
             return f"""
                 const div = document.createElement('div');
                 div.style.cssText = `
@@ -380,7 +427,6 @@ class BaseWebBot:
                 document.body.appendChild(div);
             """
         else:
-            # Relative positioning near specified element
             return f"""
                 function getElementByXpath(path) {{
                     return document.evaluate(
