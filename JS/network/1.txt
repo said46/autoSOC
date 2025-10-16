@@ -1,1 +1,22 @@
-
+fetch("https://eptw-training.sakhalinenergy.ru/User/ChangeRole?returnUrl=%2F%3FreturnUrl%3D&isMenuButton=True", {
+  "headers": {
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "accept-language": "en-US,en;q=0.9,ru;q=0.8,zh-CN;q=0.7,zh;q=0.6",
+    "cache-control": "max-age=0",
+    "content-type": "application/x-www-form-urlencoded",
+    "sec-ch-ua": "\"Chromium\";v=\"112\", \"Google Chrome\";v=\"112\", \"Not:A-Brand\";v=\"99\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "sec-fetch-dest": "document",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-user": "?1",
+    "upgrade-insecure-requests": "1"
+  },
+  "referrer": "https://eptw-training.sakhalinenergy.ru/User/ChangeRole?returnUrl=%2F%3FreturnUrl%3D&isMenuButton=True",
+  "referrerPolicy": "strict-origin-when-cross-origin",
+  "body": "CurrentRoleName=OAV&ReturnUrl=%2F%3FreturnUrl%3D&IsMenuButton=True&__RequestVerificationToken=CfDJ8M5AAfi6YR9AlhYUeiIQeb9j9iht2dUxBUqcjeu04wu4XyKkIdQ88xefuaqifPW64iFskEFc2lQrFKHuaRpMbyeY-zioevAfvLRQrdKkmXFyfkAcnyZezsAaw_bLFmE4DYuv9wHOHPDHV5PYbYdG5y6AsFsmkuch0A_dUypxmws0w0qPwB-pwLKkvUJz0B-A8Q",
+  "method": "POST",
+  "mode": "cors",
+  "credentials": "include"
+});
