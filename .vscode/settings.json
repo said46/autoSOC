@@ -1,0 +1,44 @@
+{
+    // Breadcrumbs - shows method hierarchy
+    "breadcrumbs.enabled": true,
+    "breadcrumbs.showMethods": true,
+    
+    // Outline view - shows methods in separate section
+    "outline.showMethods": true,
+    "outline.showFunctions": true,
+    "outline.showConstants": false,
+    "outline.showVariables": false,
+    "outline.showProperties": false,
+    
+    // Minimap - can help navigate to methods
+    "editor.minimap.enabled": true,
+    
+    // Symbol highlighting
+    "editor.occurrencesHighlight": true,
+    
+    // Bracket pair colorization - helps identify method boundaries
+    "editor.bracketPairColorization.enabled": true,
+    "editor.guides.bracketPairs": true,
+  
+    // Enhanced symbol display
+    "editor.semanticHighlighting.enabled": true,
+    
+    // Quick outline (Ctrl+Shift+O)
+    "workbench.commandPalette.experimental.suggestCommands": true,
+    
+    // Show method parameters in hints
+    "editor.parameterHints.enabled": true,
+    
+    // Colorize method names differently
+    "editor.tokenColorCustomizations": {
+      "textMateRules": [
+        {
+          "scope": "entity.name.function",
+          "settings": {
+            "foreground": "#DCDCAA",
+            "fontStyle": "bold"
+          }
+        }
+      ]
+    }
+  }
